@@ -1,4 +1,12 @@
 export type AgentType = 'antigravity' | 'claude_code' | 'codex' | 'orchestrator';
+export type ExecutionMode = 'safe' | 'sandboxed' | 'unrestricted';
+
+export interface AgentRunOptions {
+  model?: string;
+  effort?: 'low' | 'medium' | 'high';
+  search?: boolean;
+  continueSession?: boolean;
+}
 
 export interface ToolCall {
   id: string;
@@ -37,6 +45,7 @@ export interface Message {
   diffs?: FileDiff[];
   timestamp: string;
   status?: 'streaming' | 'done' | 'error';
+  runId?: string;
 }
 
 export interface Session {
@@ -47,6 +56,7 @@ export interface Session {
   workingDirectory: string;
   createdAt: string;
   updatedAt: string;
+  executionMode?: ExecutionMode;
 }
 
 export interface AgentBridgeTask {

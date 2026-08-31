@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { ToolCall } from '../types';
-import { ChevronRight, ChevronDown, Terminal, FileCode, Search, Wrench, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Check, AlertCircle, Loader2 } from 'lucide-react';
 
 interface ToolExecutionCardProps {
   toolCall: ToolCall;
@@ -8,38 +8,6 @@ interface ToolExecutionCardProps {
 
 export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({ toolCall }) => {
   const [isOpen, setIsOpen] = useState(false);
-
-  const getToolIcon = (name: string) => {
-    switch (name.toLowerCase()) {
-      case 'run_command':
-      case 'bash':
-      case 'terminal':
-        return <Terminal className="w-3.5 h-3.5 text-neutral-300" />;
-      case 'view_file':
-      case 'write_to_file':
-      case 'replace_file_content':
-      case 'edit_file':
-        return <FileCode className="w-3.5 h-3.5 text-neutral-300" />;
-      case 'grep_search':
-      case 'find_by_name':
-      case 'search':
-        return <Search className="w-3.5 h-3.5 text-neutral-300" />;
-      default:
-        return <Wrench className="w-3.5 h-3.5 text-neutral-300" />;
-    }
-  };
-
-  const getStatusIcon = (status: ToolCall['status']) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />;
-      case 'running':
-      case 'pending':
-        return <Loader2 className="w-3.5 h-3.5 text-neutral-400 animate-spin" />;
-      case 'error':
-        return <AlertCircle className="w-3.5 h-3.5 text-rose-400" />;
-    }
-  };
 
   const getPrimaryParam = (tool: ToolCall): string => {
     if (!tool.args) return '';
@@ -56,47 +24,53 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({ toolCall }
   const primaryParam = getPrimaryParam(toolCall);
 
   return (
-    <div className="my-1.5 rounded border border-neutral-800 bg-neutral-900/40 text-xs font-mono transition-colors">
+    <div className="my-1 rounded-md border border-neutral-800/80 bg-neutral-900/40 text-xs transition-colors">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-neutral-800/40 transition-colors"
+        className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-neutral-800/40 transition-colors select-none"
       >
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
           {isOpen ? (
-            <ChevronDown className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+            <ChevronDown className="w-3 h-3 text-neutral-500 shrink-0" />
           ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+            <ChevronRight className="w-3 h-3 text-neutral-500 shrink-0" />
           )}
-          <span className="shrink-0">{getToolIcon(toolCall.name)}</span>
-          <span className="font-medium text-neutral-200 shrink-0">{toolCall.name}</span>
+          <span className="text-neutral-300 font-medium shrink-0">{toolCall.name}</span>
           {primaryParam && (
-            <span className="truncate text-neutral-400 text-[11px]">
+            <span className="truncate text-neutral-500 text-[11px]">
               {primaryParam}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0 ml-2">
-          {getStatusIcon(toolCall.status)}
+
+        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+          {toolCall.status === 'completed' && <Check className="w-3 h-3 text-emerald-400" />}
+          {(toolCall.status === 'running' || toolCall.status === 'pending') && (
+            <Loader2 className="w-3 h-3 text-neutral-400 animate-spin" />
+          )}
+          {toolCall.status === 'error' && <AlertCircle className="w-3 h-3 text-rose-400" />}
         </div>
       </button>
 
       {isOpen && (
-        <div className="border-t border-neutral-800/80 px-3 py-2.5 bg-neutral-950/60 space-y-2">
-          <div>
-            <div className="text-[10px] uppercase text-neutral-500 tracking-wider mb-1 font-semibold">
-              Arguments
+        <div className="border-t border-neutral-800/60 px-3 py-2 bg-[#09090b]/80 space-y-2 text-xs">
+          {toolCall.args && (
+            <div>
+              <div className="text-[10px] uppercase text-neutral-500 tracking-wider mb-1">
+                Arguments
+              </div>
+              <pre className="p-2 rounded bg-neutral-900/60 border border-neutral-800 text-[11px] text-neutral-300 overflow-x-auto whitespace-pre-wrap">
+                {JSON.stringify(toolCall.args, null, 2)}
+              </pre>
             </div>
-            <pre className="p-2 rounded bg-neutral-900 border border-neutral-800 text-[11px] text-neutral-300 overflow-x-auto whitespace-pre-wrap">
-              {JSON.stringify(toolCall.args, null, 2)}
-            </pre>
-          </div>
+          )}
 
           {toolCall.output && (
             <div>
-              <div className="text-[10px] uppercase text-neutral-500 tracking-wider mb-1 font-semibold">
+              <div className="text-[10px] uppercase text-neutral-500 tracking-wider mb-1">
                 Output
               </div>
-              <pre className="p-2 rounded bg-neutral-900 border border-neutral-800 text-[11px] text-neutral-300 overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto">
+              <pre className="p-2 rounded bg-neutral-900/60 border border-neutral-800 text-[11px] text-neutral-300 overflow-x-auto whitespace-pre-wrap max-h-52 overflow-y-auto">
                 {toolCall.output}
               </pre>
             </div>
@@ -106,3 +80,4 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({ toolCall }
     </div>
   );
 };
+

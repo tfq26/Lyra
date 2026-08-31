@@ -7,10 +7,19 @@
     "dev": "concurrently -n \"HUB,UI\" -c \"magenta,cyan\" \"bun run server/index.ts\" \"vite\"",
     "dev:server": "bun run server/index.ts",
     "dev:client": "vite",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.2",
+    "@tauri-apps/plugin-notification": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-shell": "^2.3.6",
     "chokidar": "^5.0.0",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",
@@ -25,6 +34,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/bun": "latest",
     "@types/cors": "^2.8.19",
     "@types/react": "^19.2.18",

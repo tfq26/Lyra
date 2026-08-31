@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { Message, AgentType } from '../types';
+import type { Message, AgentType, AgentRunOptions } from '../types';
 import { MessageItem } from './MessageItem';
 import { AgentSelector } from './AgentSelector';
-import { ArrowUp, Loader2, Sparkles, FileCode2, Workflow, TerminalSquare, Network, Eraser } from 'lucide-react';
+import { ArrowUp, Loader2, Trash2, Square } from 'lucide-react';
+import { MessageHistorySkeleton } from './Skeletons';
+import { AgentOptions } from './AgentOptions';
 
 interface ChatViewProps {
   sessionTitle: string;
@@ -14,6 +16,11 @@ interface ChatViewProps {
   onClearSession?: () => void;
   isStreaming: boolean;
   agentStatuses: Record<AgentType, 'ready' | 'running' | 'idle' | 'offline'>;
+  isLoadingMessages?: boolean;
+  onCancelRun?: () => void;
+  agentOptions: AgentRunOptions;
+  onAgentOptionsChange: (options: AgentRunOptions) => void;
+  agentCapabilities?: Record<string, { installed: boolean }>;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -26,31 +33,53 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onClearSession,
   isStreaming,
   agentStatuses,
+  isLoadingMessages = false,
+  onCancelRun,
+  agentOptions,
+  onAgentOptionsChange,
+  agentCapabilities = {},
 }) => {
   const [prompt, setPrompt] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const shouldAutoScrollRef = useRef(true);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const handleScroll = () => {
+    if (!mainRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = mainRef.current;
+    // Keep auto-scroll active if user is within 100px of bottom
+    shouldAutoScrollRef.current = scrollHeight - (scrollTop + clientHeight) < 100;
+  };
+
+  const scrollToBottom = (force = false) => {
+    if ((force || shouldAutoScrollRef.current) && mainRef.current) {
+      mainRef.current.scrollTop = mainRef.current.scrollHeight;
+    }
   };
 
   useEffect(() => {
     scrollToBottom();
   }, [messages, isStreaming]);
 
+  useEffect(() => {
+    shouldAutoScrollRef.current = true;
+    scrollToBottom(true);
+  }, [sessionTitle]);
+
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!prompt.trim() || isStreaming) return;
+    if (!prompt.trim()) return;
+    shouldAutoScrollRef.current = true;
     onSendMessage(prompt.trim(), activeAgent);
     setPrompt('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+    setTimeout(() => scrollToBottom(true), 50);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     }
@@ -62,7 +91,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   };
 
-  const handleInsertTemplate = (text: string) => {
+  const handleInsertPrompt = (text: string) => {
     setPrompt(text);
     if (textareaRef.current) {
       textareaRef.current.focus();
@@ -70,95 +99,90 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-neutral-950">
-      {/* Top Bar */}
-      <header className="h-12 border-b border-neutral-900 px-4 flex items-center justify-between bg-neutral-950/80 backdrop-blur z-10">
+    <div className="flex-1 flex flex-col h-screen bg-[#09090b]">
+      {/* Calm Top Header */}
+      <header 
+        data-tauri-drag-region
+        className="h-12 border-b border-neutral-800/70 px-4 flex items-center justify-between bg-[#09090b]/90 backdrop-blur-sm z-10 select-none"
+      >
         <div className="flex items-center gap-3">
           <AgentSelector
             activeAgent={activeAgent}
             onSelectAgent={onSelectAgent}
             statusMap={agentStatuses}
+            capabilities={agentCapabilities}
           />
-          <div className="h-4 w-px bg-neutral-800 hidden sm:block" />
-          <span className="text-xs font-mono text-neutral-400 truncate max-w-xs hidden sm:inline">
+          <span className="text-xs text-neutral-500 truncate max-w-xs hidden sm:inline">
             {sessionTitle}
           </span>
+          <AgentOptions agent={activeAgent} options={agentOptions} onChange={onAgentOptionsChange} />
         </div>
 
         <div className="flex items-center gap-2">
           {isStreaming && (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono bg-amber-950/30 border border-amber-800/50 text-amber-300">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              <span>Processing...</span>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] text-neutral-400 bg-neutral-900 border border-neutral-800">
+              <Loader2 className="w-3 h-3 animate-spin text-neutral-300" />
+              <span>Thinking...</span>
             </div>
+          )}
+
+          {isStreaming && onCancelRun && (
+            <button onClick={onCancelRun} className="p-1.5 rounded-md text-neutral-500 hover:text-rose-300 hover:bg-neutral-800/50 transition-colors" title="Cancel run">
+              <Square className="w-3.5 h-3.5" />
+            </button>
           )}
 
           {onClearSession && messages.length > 0 && (
             <button
               onClick={onClearSession}
-              className="p-1 rounded text-neutral-500 hover:text-neutral-300 hover:bg-neutral-900 transition-colors"
-              title="Clear current view"
+              className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800/50 transition-colors"
+              title="Clear messages"
             >
-              <Eraser className="w-3.5 h-3.5" />
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
       </header>
 
       {/* Messages area */}
-      <main className="flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-xl mx-auto space-y-6">
-            <div className="w-10 h-10 rounded border border-neutral-800 bg-neutral-900 flex items-center justify-center text-neutral-300">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            
+      <main ref={mainRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+        {isLoadingMessages ? (
+          <MessageHistorySkeleton />
+        ) : messages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-lg mx-auto space-y-4 animate-fade-in">
             <div className="space-y-1">
-              <h2 className="text-sm font-semibold text-neutral-200">Unified Multi-Agent Workspace</h2>
-              <p className="text-xs text-neutral-500 max-w-md">
-                All CLI chats from Antigravity, Claude Code, and Codex are unified in this session. Ask for system diagrams, review code diffs, or execute handoffs.
+              <h2 className="text-sm font-medium text-neutral-200">Unified Agent Workspace</h2>
+              <p className="text-xs text-neutral-500 leading-relaxed">
+                Seamlessly interact with Antigravity, Claude Code, and Codex in a unified workspace.
               </p>
             </div>
 
-            {/* Quick Starters */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full text-left font-mono text-xs">
+            {/* Subtle quick prompts */}
+            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-2">
               <button
                 onClick={() =>
-                  handleInsertTemplate(
-                    'Analyze the architecture of this project and generate a detailed Mermaid system diagram.'
+                  handleInsertPrompt(
+                    'Analyze the architecture of this project and generate a Mermaid diagram.'
                   )
                 }
-                className="p-3 rounded border border-neutral-900 bg-neutral-900/40 hover:bg-neutral-900 hover:border-neutral-800 transition-all text-neutral-300 space-y-1 group"
+                className="px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60 hover:border-neutral-700 transition-colors text-neutral-400 hover:text-neutral-200 text-xs text-left"
               >
-                <div className="flex items-center gap-1.5 font-medium text-neutral-200">
-                  <Workflow className="w-3.5 h-3.5 text-sky-400" />
-                  Generate Architecture Diagram
-                </div>
-                <div className="text-[11px] text-neutral-500 truncate">
-                  Visualizes system flows in Mermaid
-                </div>
+                Generate architecture diagram
               </button>
-
               <button
                 onClick={() =>
-                  handleInsertTemplate(
-                    'Plan the refactor of our service layer, break down the tasks into steps, and generate the diffs.'
+                  handleInsertPrompt(
+                    'Review pending file diffs, explain the changes, and check test coverage.'
                   )
                 }
-                className="p-3 rounded border border-neutral-900 bg-neutral-900/40 hover:bg-neutral-900 hover:border-neutral-800 transition-all text-neutral-300 space-y-1 group"
+                className="px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60 hover:border-neutral-700 transition-colors text-neutral-400 hover:text-neutral-200 text-xs text-left"
               >
-                <div className="flex items-center gap-1.5 font-medium text-neutral-200">
-                  <FileCode2 className="w-3.5 h-3.5 text-amber-400" />
-                  Plan & Review Diffs
-                </div>
-                <div className="text-[11px] text-neutral-500 truncate">
-                  Collapsible thoughts & side-by-side diffs
-                </div>
+                Review code diffs
               </button>
             </div>
           </div>
         ) : (
-          <div className="divide-y divide-neutral-900">
+          <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-6 animate-fade-in">
             {messages.map((message) => (
               <MessageItem
                 key={message.id}
@@ -166,57 +190,33 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 onDispatchToAgent={onDispatchToAgent}
               />
             ))}
-            <div ref={messagesEndRef} />
           </div>
         )}
       </main>
 
       {/* Input area */}
-      <footer className="p-4 border-t border-neutral-900 bg-neutral-950 space-y-2">
-        <div className="max-w-4xl mx-auto space-y-2">
-          {/* Quick command shortcut pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto text-[11px] font-mono text-neutral-500">
-            <span className="text-[10px] uppercase font-semibold text-neutral-600 tracking-wider">Quick:</span>
-            <button
-              onClick={() => handleInsertTemplate('/diagram Create a system architecture diagram for our codebase')}
-              className="px-2 py-0.5 rounded border border-neutral-800/80 bg-neutral-900/40 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
-            >
-              /diagram
-            </button>
-            <button
-              onClick={() => handleInsertTemplate('/handoff Hand off architecture specification to Claude Code for execution')}
-              className="px-2 py-0.5 rounded border border-neutral-800/80 bg-neutral-900/40 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
-            >
-              /handoff
-            </button>
-            <button
-              onClick={() => handleInsertTemplate('/diff Review pending file diffs and verify test coverage with Codex')}
-              className="px-2 py-0.5 rounded border border-neutral-800/80 bg-neutral-900/40 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
-            >
-              /diff
-            </button>
-          </div>
-
+      <footer className="p-4 bg-[#09090b] border-t border-neutral-800/70">
+        <div className="max-w-3xl mx-auto">
           <form
             onSubmit={handleSubmit}
-            className="relative rounded-lg border border-neutral-800 bg-neutral-900/50 focus-within:border-neutral-700 transition-colors"
+            className="relative rounded-lg border border-neutral-800 bg-neutral-900/60 focus-within:border-neutral-700 focus-within:bg-neutral-900 transition-all shadow-sm"
           >
             <textarea
               ref={textareaRef}
               value={prompt}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder={`Send instruction to ${activeAgent}... (Enter to send, Shift+Enter for newline)`}
+              placeholder={`Ask ${activeAgent === 'claude_code' ? 'Claude' : activeAgent === 'codex' ? 'Codex' : 'Antigravity'}...`}
               rows={1}
-              className="w-full bg-transparent px-3.5 py-3 pr-12 text-xs text-neutral-200 placeholder:text-neutral-600 focus:outline-none resize-none font-sans"
-              style={{ maxHeight: '200px' }}
+              className="w-full bg-transparent px-3.5 py-2.5 pr-10 text-xs text-neutral-100 placeholder:text-neutral-600 focus:outline-none resize-none"
+              style={{ maxHeight: '180px' }}
             />
 
-            <div className="absolute right-2 bottom-2 flex items-center gap-1">
+            <div className="absolute right-2 bottom-2 flex items-center">
               <button
                 type="submit"
                 disabled={!prompt.trim() || isStreaming}
-                className="p-1.5 rounded bg-neutral-100 text-neutral-950 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                className="p-1 rounded-md bg-neutral-200 text-neutral-950 hover:bg-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
                 title="Send instruction"
               >
                 {isStreaming ? (
@@ -227,11 +227,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </button>
             </div>
           </form>
-
-          <div className="flex items-center justify-between text-[11px] font-mono text-neutral-600 px-1">
-            <span>Engine: {activeAgent}</span>
-            <span>Return to send • Shift+Return for newline</span>
-          </div>
         </div>
       </footer>
     </div>

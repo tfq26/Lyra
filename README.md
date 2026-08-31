@@ -37,6 +37,31 @@ This starts both:
 
 Open `http://localhost:5173` in your browser.
 
+### Safety and runtime configuration
+
+Agent runs default to `safe` mode. Dangerous CLI bypass flags are only enabled when both
+the session requests `unrestricted` mode and `LYRA_ENABLE_UNRESTRICTED=true` is set on the
+server. Use `LYRA_AGENT_TIMEOUT_MS` to configure the maximum run duration.
+
+For a protected hub deployment, set `LYRA_AUTH_TOKEN`; API requests must send it as a
+Bearer token and WebSocket clients may provide it as a bearer header or `?token=` query
+parameter. This token gate is intended as a deployment bridge; a complete OIDC provider
+integration remains a follow-up before exposing Lyra to multiple users.
+
+For the Vite client to attach the token automatically, also set
+`VITE_LYRA_AUTH_TOKEN` when starting the UI.
+
+See [`docs/cli-capabilities.md`](docs/cli-capabilities.md) for the locally verified agent
+CLI options and current Lyra forwarding support.
+
+### Linux Docker deployment
+
+On the Linux server, run `./setup-server.sh`. The script interactively selects which CLIs
+to install, builds the image, starts Lyra, and then launches each selected CLI's own login
+flow. Antigravity's official Linux/macOS installer is used, Codex is installed from its
+official npm package, and Claude Code is installed from Anthropic's official npm package.
+Credentials are kept in Docker volumes rather than committed to the image.
+
 ---
 
 ## 📁 Architecture Overview

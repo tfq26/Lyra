@@ -47,10 +47,49 @@ export class AntigravityAdapter {
     }
   }
 
+  private extractTitleFromTranscript(transcriptPath: string): string | null {
+    try {
+      const fd = fs.openSync(transcriptPath, 'r');
+      const buffer = Buffer.alloc(8192);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      fs.closeSync(fd);
+      const content = buffer.toString('utf-8', 0, bytesRead);
+      const lines = content.split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const step = JSON.parse(line);
+          if (step.type === 'USER_INPUT' && step.content) {
+            const userContent = String(step.content);
+            const match = userContent.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+            let rawTitle = match ? (match[1] || '').trim() : userContent.trim();
+            const firstLine = (rawTitle.split('\n')[0] || '').replace(/\s+/g, ' ').trim();
+            if (firstLine) {
+              return firstLine.length > 55 ? firstLine.slice(0, 52) + '...' : firstLine;
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  }
+
   private processTranscript(conversationId: string, transcriptPath: string) {
     try {
       const stats = fs.statSync(transcriptPath);
       const prevSize = this.watchedFiles.get(transcriptPath) || 0;
+      const unifiedSessionId = `agy-${conversationId}`;
+      const mtimeStr = stats.mtime.toISOString();
+      const ctimeStr = stats.birthtime ? stats.birthtime.toISOString() : mtimeStr;
+
+      // Ensure session title is set and human readable
+      const title = this.extractTitleFromTranscript(transcriptPath) || `Antigravity ${conversationId.slice(0, 8)}`;
+      this.store.updateSessionMeta(unifiedSessionId, {
+        title,
+        activeAgents: ['antigravity'],
+        updatedAt: mtimeStr,
+        createdAt: ctimeStr,
+      });
 
       if (stats.size > prevSize) {
         const fd = fs.openSync(transcriptPath, 'r');
@@ -61,7 +100,6 @@ export class AntigravityAdapter {
         this.watchedFiles.set(transcriptPath, stats.size);
 
         const newLines = buffer.toString('utf-8').split('\n').filter(Boolean);
-        const unifiedSessionId = `agy-${conversationId}`;
 
         for (const line of newLines) {
           try {
@@ -81,11 +119,19 @@ export class AntigravityAdapter {
     const type = step.type;
 
     if (type === 'USER_INPUT') {
+      let rawText = step.content || '';
+      const match = rawText.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+      let cleanText = match ? match[1].trim() : rawText;
+      cleanText = cleanText
+        .replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/g, '')
+        .replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/g, '')
+        .trim();
+
       this.store.appendEvent(sessionId, {
         agent: 'user',
         type: 'message',
         payload: {
-          text: step.content || '',
+          text: cleanText,
         },
       });
     } else if (type === 'PLANNER_RESPONSE') {

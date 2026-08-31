@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { AgentType } from './types';
+import type { AgentType } from './types';
 
 export interface PipelineTask {
   id: string;

@@ -7,6 +7,7 @@ export class ClaudeAdapter {
   private baseDir: string;
   private store: UnifiedStore;
   private watchedFiles: Map<string, number> = new Map();
+  private fragments: Map<string, string> = new Map();
   private intervalId: NodeJS.Timeout | null = null;
 
   constructor(store: UnifiedStore) {
@@ -48,7 +49,8 @@ export class ClaudeAdapter {
   private processClaudeLog(sessionId: string, filePath: string) {
     try {
       const stats = fs.statSync(filePath);
-      const prevSize = this.watchedFiles.get(filePath) || 0;
+      const checkpoint = this.store.getCheckpoint(filePath);
+      const prevSize = Math.min(this.watchedFiles.get(filePath) ?? checkpoint, stats.size);
 
       if (stats.size > prevSize) {
         const fd = fs.openSync(filePath, 'r');
@@ -57,8 +59,12 @@ export class ClaudeAdapter {
         fs.closeSync(fd);
 
         this.watchedFiles.set(filePath, stats.size);
+        this.store.setCheckpoint(filePath, stats.size);
 
-        const lines = buffer.toString('utf-8').split('\n').filter(Boolean);
+        const pending = `${this.fragments.get(filePath) || ''}${buffer.toString('utf-8')}`;
+        const parts = pending.split('\n');
+        this.fragments.set(filePath, parts.pop() || '');
+        const lines = parts.filter(Boolean);
         const unifiedSessionId = `claude-${sessionId}`;
 
         for (const line of lines) {

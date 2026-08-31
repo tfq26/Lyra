@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { FileDiff } from '../types';
-import { FileCode, Plus, Minus, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
 
 interface DiffViewerProps {
   diff: FileDiff;
@@ -14,22 +14,22 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
     if (diff.patch || diff.content) {
       navigator.clipboard.writeText(diff.patch || diff.content || '');
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => setCopied(false), 1500);
     }
   };
 
   const renderPatchLines = () => {
     if (!diff.patch) {
       return (
-        <div className="p-3 text-neutral-400 font-mono text-xs">
-          {diff.content || 'No diff details available.'}
+        <div className="p-3 text-neutral-500 text-xs">
+          {diff.content || 'No diff content.'}
         </div>
       );
     }
 
     const lines = diff.patch.split('\n');
     return (
-      <div className="font-mono text-xs divide-y divide-neutral-900/50">
+      <div className="text-xs divide-y divide-neutral-900/40">
         {lines.map((line, idx) => {
           const isAdded = line.startsWith('+') && !line.startsWith('+++');
           const isRemoved = line.startsWith('-') && !line.startsWith('---');
@@ -39,11 +39,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
           let textColor = 'text-neutral-300';
 
           if (isAdded) {
-            lineBg = 'bg-emerald-950/20 text-emerald-300';
+            lineBg = 'bg-emerald-500/10 text-emerald-300';
           } else if (isRemoved) {
-            lineBg = 'bg-rose-950/20 text-rose-300';
+            lineBg = 'bg-rose-500/10 text-rose-300';
           } else if (isHunk) {
-            lineBg = 'bg-neutral-900 text-neutral-500 font-semibold';
+            lineBg = 'bg-neutral-900/60 text-neutral-500 font-medium';
           }
 
           return (
@@ -62,43 +62,37 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
   };
 
   return (
-    <div className="my-2 rounded border border-neutral-800 bg-neutral-950 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-neutral-900 border-b border-neutral-800">
+    <div className="my-2 rounded-md border border-neutral-800/80 bg-[#09090b] overflow-hidden text-xs">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-900/50 border-b border-neutral-800/60 select-none">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-2 text-left text-xs font-mono text-neutral-200 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-left text-neutral-300 hover:text-neutral-100 transition-colors"
         >
           {isOpen ? (
-            <ChevronDown className="w-3.5 h-3.5 text-neutral-500" />
+            <ChevronDown className="w-3 h-3 text-neutral-500" />
           ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-neutral-500" />
+            <ChevronRight className="w-3 h-3 text-neutral-500" />
           )}
-          <FileCode className="w-3.5 h-3.5 text-neutral-400" />
           <span className="font-medium">{diff.filename}</span>
         </button>
 
-        <div className="flex items-center gap-3 text-xs font-mono">
-          <div className="flex items-center gap-1.5 text-[11px]">
-            <span className="flex items-center text-emerald-400">
-              <Plus className="w-3 h-3" />
-              {diff.additions}
-            </span>
-            <span className="flex items-center text-rose-400">
-              <Minus className="w-3 h-3" />
-              {diff.deletions}
-            </span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="text-emerald-400">+{diff.additions}</span>
+            <span className="text-rose-400">-{diff.deletions}</span>
           </div>
           <button
             onClick={handleCopy}
-            className="text-neutral-400 hover:text-neutral-200 transition-colors"
-            title="Copy diff patch"
+            className="text-neutral-500 hover:text-neutral-300 transition-colors"
+            title="Copy diff"
           >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? <Check className="w-3.5 h-3.5 text-neutral-300" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
 
-      {isOpen && <div className="max-h-80 overflow-y-auto">{renderPatchLines()}</div>}
+      {isOpen && <div className="max-h-72 overflow-y-auto">{renderPatchLines()}</div>}
     </div>
   );
 };
+

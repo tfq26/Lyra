@@ -7,6 +7,7 @@ export class CodexAdapter {
   private baseDir: string;
   private store: UnifiedStore;
   private watchedFiles: Map<string, number> = new Map();
+  private fragments: Map<string, string> = new Map();
   private intervalId: NodeJS.Timeout | null = null;
 
   constructor(store: UnifiedStore) {
@@ -33,8 +34,10 @@ export class CodexAdapter {
   private syncRecent() {
     try {
       if (!fs.existsSync(this.baseDir)) return;
+      const ignoreNames = ['models_cache', 'version', 'chrome-native-hosts', 'realtime-voice-continuity', 'session_index', 'history'];
       const files = fs.readdirSync(this.baseDir, { withFileTypes: true })
-        .filter((f) => f.isFile() && (f.name.endsWith('.json') || f.name.endsWith('.jsonl')));
+        .filter((f) => f.isFile() && (f.name.endsWith('.json') || f.name.endsWith('.jsonl')) && !f.name.startsWith('.'))
+        .filter((f) => !ignoreNames.some((ign) => f.name.includes(ign)));
 
       for (const file of files) {
         const fullPath = path.join(this.baseDir, file.name);
@@ -48,7 +51,8 @@ export class CodexAdapter {
   private processCodexLog(sessionId: string, filePath: string) {
     try {
       const stats = fs.statSync(filePath);
-      const prevSize = this.watchedFiles.get(filePath) || 0;
+      const checkpoint = this.store.getCheckpoint(filePath);
+      const prevSize = Math.min(this.watchedFiles.get(filePath) ?? checkpoint, stats.size);
 
       if (stats.size > prevSize) {
         const fd = fs.openSync(filePath, 'r');
@@ -57,8 +61,12 @@ export class CodexAdapter {
         fs.closeSync(fd);
 
         this.watchedFiles.set(filePath, stats.size);
+        this.store.setCheckpoint(filePath, stats.size);
 
-        const lines = buffer.toString('utf-8').split('\n').filter(Boolean);
+        const pending = `${this.fragments.get(filePath) || ''}${buffer.toString('utf-8')}`;
+        const parts = pending.split('\n');
+        this.fragments.set(filePath, parts.pop() || '');
+        const lines = parts.filter(Boolean);
         const unifiedSessionId = `codex-${sessionId}`;
 
         for (const line of lines) {

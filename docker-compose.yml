@@ -1,0 +1,29 @@
+services:
+  lyra:
+    build:
+      context: .
+      args:
+        INSTALL_ANTIGRAVITY: ${INSTALL_ANTIGRAVITY:-false}
+        INSTALL_CODEX: ${INSTALL_CODEX:-false}
+        INSTALL_CLAUDE: ${INSTALL_CLAUDE:-false}
+    ports:
+      - "${LYRA_HUB_PORT:-3001}:3001"
+    environment:
+      NODE_ENV: production
+      LYRA_AUTH_TOKEN: ${LYRA_AUTH_TOKEN:-}
+      LYRA_ENABLE_UNRESTRICTED: ${LYRA_ENABLE_UNRESTRICTED:-false}
+      LYRA_AGENT_TIMEOUT_MS: ${LYRA_AGENT_TIMEOUT_MS:-900000}
+    volumes:
+      - lyra-data:/root/.lyra
+      - antigravity-config:/root/.gemini
+      - codex-config:/root/.codex
+      - claude-config:/root/.claude
+      - ${LYRA_WORKSPACE:-./workspace}:/workspace
+    working_dir: /workspace
+    restart: unless-stopped
+
+volumes:
+  lyra-data:
+  antigravity-config:
+  codex-config:
+  claude-config:
