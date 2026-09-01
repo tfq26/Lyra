@@ -13,6 +13,9 @@ services:
       LYRA_AUTH_TOKEN: ${LYRA_AUTH_TOKEN:-}
       LYRA_ENABLE_UNRESTRICTED: ${LYRA_ENABLE_UNRESTRICTED:-false}
       LYRA_AGENT_TIMEOUT_MS: ${LYRA_AGENT_TIMEOUT_MS:-900000}
+      SSH_CONNECTION: ${SSH_CONNECTION:-}
+      SSH_TTY: ${SSH_TTY:-}
+      TERM: ${TERM:-xterm-256color}
     volumes:
       - lyra-data:/root/.lyra
       - antigravity-config:/root/.gemini

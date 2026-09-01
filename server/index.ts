@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { UnifiedStore } from './unifiedStore';
 import { AntigravityAdapter } from './adapters/antigravityAdapter';
 import { ClaudeAdapter } from './adapters/claudeAdapter';
@@ -179,7 +180,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
-    const distRoot = path.resolve(process.cwd(), 'dist');
+    const distRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
     const requested = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//, '');
     const candidate = path.resolve(distRoot, requested);
     const filePath = candidate.startsWith(`${distRoot}${path.sep}`) && fs.existsSync(candidate) && fs.statSync(candidate).isFile()
@@ -335,7 +336,8 @@ messageBus.on('task_created', (task) => {
 wss.on('connection', (ws, req) => {
   const requestUrl = new URL(req.url || '/', `http://localhost:${PORT}`);
   const suppliedToken = req.headers.authorization?.replace(/^Bearer\s+/i, '') || requestUrl.searchParams.get('token');
-  if (authToken && suppliedToken !== authToken) {
+  const cookieToken = (req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith('lyra_auth='))?.slice('lyra_auth='.length);
+  if (authToken && suppliedToken !== authToken && cookieToken !== authToken) {
     ws.close(1008, 'Authentication required');
     return;
   }
