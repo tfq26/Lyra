@@ -1,0 +1,616 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lyra AWS beta foundation (control plane, Fargate runner definition, team data, and artifact storage).
+
+Parameters:
+  LyraImageUri:
+    Type: String
+    Description: Immutable image URI for the Lyra API image in ECR.
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for HTTPS. Required before enabling hosted provider credential entry.
+  PublicHostname:
+    Type: String
+    Default: ''
+    Description: DNS hostname covered by CertificateArn and pointed at the ALB.
+  SESFromEmail:
+    Type: String
+    Default: ''
+    Description: Verified SES sender for account verification and password reset messages.
+  DesiredApiTasks:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 1
+  DatabaseName:
+    Type: String
+    Default: lyra
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+  BedrockRoleArn:
+    Type: String
+    Default: ''
+    Description: Optional single customer IAM role Lyra may assume for Bedrock during an invite-only beta.
+  ManagedOpenRouterSecretArn:
+    Type: String
+    Default: ''
+    Description: Optional Secrets Manager ARN containing Lyra-managed OpenRouter credentials.
+  TenantId:
+    Type: String
+    Default: single-tenant-beta
+    AllowedPattern: '^[A-Za-z0-9_-]{1,64}$'
+    Description: Tenant namespace for this single-tenant beta stack.
+
+Conditions:
+  HasBedrockRole: !Not [!Equals [!Ref BedrockRoleArn, '']]
+  HasManagedOpenRouter: !Not [!Equals [!Ref ManagedOpenRouterSecretArn, '']]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+
+Rules:
+  HttpsCertificateRequiresHostname:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref CertificateArn, '']
+          - !Not [!Equals [!Ref PublicHostname, '']]
+        AssertDescription: Set PublicHostname when enabling an HTTPS certificate.
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.44.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: lyra-beta }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.44.0.0/20
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.44.16.0/20
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRouteTable }
+  PublicSubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRouteTable }
+
+  ApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lyra API tasks; inbound only from the application load balancer.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3001
+          ToPort: 3001
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTPS entry to Lyra.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL accepts connections only from Lyra API tasks.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ApiSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref RunnerSecurityGroup
+  RunnerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Isolated Lyra execution tasks.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EFS accepts NFS only from Lyra API and runner tasks.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ApiSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref RunnerSecurityGroup
+
+  LyraWorkspaceFileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+  EfsMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref LyraWorkspaceFileSystem
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroups: [!Ref EfsSecurityGroup]
+  EfsMountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref LyraWorkspaceFileSystem
+      SubnetId: !Ref PublicSubnetB
+      SecurityGroups: [!Ref EfsSecurityGroup]
+  LyraDataAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref LyraWorkspaceFileSystem
+      PosixUser: { Uid: '1000', Gid: '1000' }
+      RootDirectory:
+        Path: /lyra/data
+        CreationInfo: { OwnerUid: '1000', OwnerGid: '1000', Permissions: '0750' }
+  WorkspaceAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref LyraWorkspaceFileSystem
+      PosixUser: { Uid: '1000', Gid: '1000' }
+      RootDirectory:
+        Path: /lyra/workspaces
+        CreationInfo: { OwnerUid: '1000', OwnerGid: '1000', Permissions: '0750' }
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Port: 3001
+      Protocol: HTTP
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      Matcher: { HttpCode: '200' }
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions: !If
+        - HasCertificate
+        - - Type: redirect
+            RedirectConfig: { Protocol: HTTPS, Port: '443', StatusCode: HTTP_301 }
+        - - Type: forward
+            TargetGroupArn: !Ref ApiTargetGroup
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates: [{ CertificateArn: !Ref CertificateArn }]
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /lyra/${AWS::StackName}/api
+      RetentionInDays: 30
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireRunArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+  RunQueueDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  RunQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 960
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RunQueueDlq.Arn
+        maxReceiveCount: 3
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"lyra"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Lyra beta database subnets.
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      Engine: postgres
+      EngineVersion: '16'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: '20'
+      StorageEncrypted: true
+      DBName: !Ref DatabaseName
+      MasterUsername: lyra
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadLyraSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref DatabaseSecret, !Ref LyraAuthSecret, !Ref BetterAuthSecret]
+  LyraAuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Internal bearer token used only between the Lyra API and Fargate runner tasks.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+  BetterAuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Better Auth signing and encryption secret for Lyra user sessions.
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+  ApiTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LyraRunInfrastructureAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility]
+                Resource: !GetAtt RunQueue.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref RunnerTaskDefinition
+              - Effect: Allow
+                Action: [ecs:DescribeTasks, ecs:StopTask]
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${Cluster}/*'
+              - Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: [!GetAtt RunnerTaskRole.Arn, !GetAtt ExecutionRole.Arn]
+              - !If
+                - HasBedrockRole
+                - Effect: Allow
+                  Action: sts:AssumeRole
+                  Resource: !Ref BedrockRoleArn
+                - !Ref AWS::NoValue
+        - PolicyName: LyraNativeAgentAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite]
+                Resource: !GetAtt LyraWorkspaceFileSystem.Arn
+                Condition:
+                  StringEquals:
+                    elasticfilesystem:AccessPointArn: [!GetAtt LyraDataAccessPoint.Arn, !GetAtt WorkspaceAccessPoint.Arn]
+              - Effect: Allow
+                Action: [secretsmanager:CreateSecret, secretsmanager:PutSecretValue, secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyra/tenants/${TenantId}/providers/*'
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:Converse, bedrock:ConverseStream, bedrock:GetInferenceProfile, bedrock:ListInferenceProfiles]
+                Resource: '*'
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SESFromEmail}'
+              - !If
+                - HasManagedOpenRouter
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref ManagedOpenRouterSecretArn
+                - !Ref AWS::NoValue
+  RunnerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StoreRunArtifacts
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+        - PolicyName: RunnerWorkspaceAndProviderAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite]
+                Resource: !GetAtt LyraWorkspaceFileSystem.Arn
+                Condition:
+                  StringEquals:
+                    elasticfilesystem:AccessPointArn: [!GetAtt LyraDataAccessPoint.Arn, !GetAtt WorkspaceAccessPoint.Arn]
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lyra/tenants/${TenantId}/providers/*'
+              - !If
+                - HasBedrockRole
+                - Effect: Allow
+                  Action: sts:AssumeRole
+                  Resource: !Ref BedrockRoleArn
+                - !Ref AWS::NoValue
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:Converse, bedrock:ConverseStream, bedrock:GetInferenceProfile, bedrock:ListInferenceProfiles]
+                Resource: '*'
+              - !If
+                - HasManagedOpenRouter
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref ManagedOpenRouterSecretArn
+                - !Ref AWS::NoValue
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt ApiTaskRole.Arn
+      Volumes:
+        - Name: LyraData
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref LyraWorkspaceFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig: { AccessPointId: !Ref LyraDataAccessPoint, IAM: ENABLED }
+        - Name: Workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref LyraWorkspaceFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig: { AccessPointId: !Ref WorkspaceAccessPoint, IAM: ENABLED }
+      ContainerDefinitions:
+        - Name: lyra-api
+          Image: !Ref LyraImageUri
+          Essential: true
+          PortMappings: [{ ContainerPort: 3001, Protocol: tcp }]
+          MountPoints:
+            - { SourceVolume: LyraData, ContainerPath: /data/lyra, ReadOnly: false }
+            - { SourceVolume: Workspace, ContainerPath: /workspace, ReadOnly: false }
+          Environment:
+            - { Name: NODE_ENV, Value: production }
+            - { Name: LYRA_HOSTED, Value: 'true' }
+            - { Name: LYRA_AUTH_DISABLE_SIGNUP, Value: 'true' }
+            - { Name: BETTER_AUTH_URL, Value: !Sub 'https://${PublicHostname}' }
+            - { Name: LYRA_SES_FROM_EMAIL, Value: !Ref SESFromEmail }
+            - { Name: LYRA_TENANT_ID, Value: !Ref TenantId }
+            - { Name: LYRA_STORAGE_PATH, Value: /data/lyra }
+            - { Name: LYRA_DATABASE_HOST, Value: !GetAtt Database.Endpoint.Address }
+            - { Name: LYRA_DATABASE_PORT, Value: !GetAtt Database.Endpoint.Port }
+            - { Name: LYRA_DATABASE_NAME, Value: !Ref DatabaseName }
+            - { Name: LYRA_DATABASE_USER, Value: lyra }
+            - { Name: LYRA_DATABASE_SSL, Value: 'true' }
+            - { Name: LYRA_RUN_QUEUE_URL, Value: !Ref RunQueue }
+            - { Name: LYRA_ARTIFACT_BUCKET, Value: !Ref ArtifactBucket }
+            - { Name: LYRA_STRANDS_SESSION_BUCKET, Value: !Ref ArtifactBucket }
+            - { Name: LYRA_ECS_CLUSTER, Value: !Ref Cluster }
+            - { Name: LYRA_RUNNER_TASK_DEFINITION, Value: !Ref RunnerTaskDefinition }
+            - { Name: LYRA_RUNNER_SUBNETS, Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]] }
+            - { Name: LYRA_RUNNER_SECURITY_GROUP, Value: !Ref RunnerSecurityGroup }
+            - { Name: LYRA_RUNNER_WS_URL, Value: !If [HasCertificate, !Sub 'wss://${PublicHostname}', ''] }
+            - { Name: LYRA_MANAGED_OPENROUTER_SECRET_ARN, Value: !Ref ManagedOpenRouterSecretArn }
+          Secrets:
+            - { Name: LYRA_RUNNER_TOKEN, ValueFrom: !Ref LyraAuthSecret }
+            - { Name: BETTER_AUTH_SECRET, ValueFrom: !Ref BetterAuthSecret }
+            - { Name: LYRA_DATABASE_PASSWORD, ValueFrom: !Sub '${DatabaseSecret}:password::' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+  RunnerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '2048'
+      Memory: '4096'
+      EphemeralStorage: { SizeInGiB: 50 }
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt RunnerTaskRole.Arn
+      Volumes:
+        - Name: LyraData
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref LyraWorkspaceFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig: { AccessPointId: !Ref LyraDataAccessPoint, IAM: ENABLED }
+        - Name: Workspace
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref LyraWorkspaceFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig: { AccessPointId: !Ref WorkspaceAccessPoint, IAM: ENABLED }
+      ContainerDefinitions:
+        - Name: lyra-runner
+          Image: !Ref LyraImageUri
+          Essential: true
+          Command: ["bun", "run", "/app/server/runner-task.ts"]
+          MountPoints:
+            - { SourceVolume: LyraData, ContainerPath: /data/lyra, ReadOnly: false }
+            - { SourceVolume: Workspace, ContainerPath: /workspace, ReadOnly: false }
+          Environment:
+            - { Name: LYRA_ARTIFACT_BUCKET, Value: !Ref ArtifactBucket }
+            - { Name: LYRA_STORAGE_PATH, Value: /data/lyra }
+            - { Name: LYRA_HOSTED, Value: 'true' }
+            - { Name: LYRA_TENANT_ID, Value: !Ref TenantId }
+            - { Name: LYRA_STRANDS_SESSION_BUCKET, Value: !Ref ArtifactBucket }
+            - { Name: LYRA_DATABASE_HOST, Value: !GetAtt Database.Endpoint.Address }
+            - { Name: LYRA_DATABASE_PORT, Value: !GetAtt Database.Endpoint.Port }
+            - { Name: LYRA_DATABASE_NAME, Value: !Ref DatabaseName }
+            - { Name: LYRA_DATABASE_USER, Value: lyra }
+            - { Name: LYRA_DATABASE_SSL, Value: 'true' }
+            - { Name: LYRA_RUNNER_WS_URL, Value: !If [HasCertificate, !Sub 'wss://${PublicHostname}', ''] }
+            - { Name: LYRA_MANAGED_OPENROUTER_SECRET_ARN, Value: !Ref ManagedOpenRouterSecretArn }
+          Secrets:
+            - { Name: LYRA_RUNNER_TOKEN, ValueFrom: !Ref LyraAuthSecret }
+            - { Name: LYRA_DATABASE_PASSWORD, ValueFrom: !Sub '${DatabaseSecret}:password::' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: runner
+  ApiService:
+    Type: AWS::ECS::Service
+    DependsOn: HttpListener
+    Properties:
+      Cluster: !Ref Cluster
+      DesiredCount: !Ref DesiredApiTasks
+      LaunchType: FARGATE
+      TaskDefinition: !Ref ApiTaskDefinition
+      EnableExecuteCommand: false
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups: [!Ref ApiSecurityGroup]
+          Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      LoadBalancers:
+        - ContainerName: lyra-api
+          ContainerPort: 3001
+          TargetGroupArn: !Ref ApiTargetGroup
+
+Outputs:
+  ApiUrl:
+    Value: !If [HasCertificate, !Sub 'https://${PublicHostname}', !Sub 'http://${LoadBalancer.DNSName}']
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+  RunQueueUrl:
+    Value: !Ref RunQueue
+  RunnerTaskDefinitionArn:
+    Value: !Ref RunnerTaskDefinition
+  EcsClusterName:
+    Value: !Ref Cluster
+  LyraApiTaskRoleArn:
+    Value: !GetAtt ApiTaskRole.Arn
+  LyraWorkspaceFileSystemId:
+    Value: !Ref LyraWorkspaceFileSystem
+  LyraDataAccessPointId:
+    Value: !Ref LyraDataAccessPoint
+  WorkspaceAccessPointId:
+    Value: !Ref WorkspaceAccessPoint

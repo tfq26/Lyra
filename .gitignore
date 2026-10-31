@@ -37,3 +37,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 src-tauri/target/
 src-tauri/gen/
 
+# Lyra local temporary store and test worktrees
+.bun-temp/
+.lyra-store/
+.lyra/
+

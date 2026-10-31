@@ -53,10 +53,18 @@ Claude Code was unavailable locally, so its exact installed version and flags co
 
 Likely follow-up areas are model selection, resume/continue, permission mode, allowed/disallowed tools, additional directories, structured output, and stream format. These must be verified against the installed CLI before implementation.
 
-## High-value next integrations
+## OpenCode
+
+Lyra discovers `opencode` and starts a non-interactive `opencode run --format json` process in the assigned task worktree. The configured model is passed with `--model`. Provider authentication stays in OpenCode's native config. Lyra does not yet verify that provider auth is valid before a run; readiness reports the CLI as installed and authentication as unknown.
+
+## Hermes Agent
+
+Lyra discovers `hermes-agent` (or `hermes`) and starts `hermes-agent --query ...` in the task worktree. It can pass a configured `--model`; the rest of Hermes setup and provider authentication remain native. Lyra reports installed readiness only and does not currently configure Hermes toolsets or inspect its provider login.
+
+## Remaining harness integration work
 
 1. Add UI controls for model, effort, approval policy, sandbox policy, search, and additional directories.
-2. Add runtime capability discovery to the agent selector/status panel.
+2. Add authenticated/version-aware capability discovery for every installed CLI.
 3. Add explicit resume/review/archive/delete actions for persisted CLI sessions.
 4. Add structured output/schema support where the agent supports it.
 5. Add MCP/plugin configuration only after the core run/session lifecycle is stable.

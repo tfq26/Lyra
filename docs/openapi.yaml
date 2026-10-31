@@ -1,0 +1,544 @@
+openapi: 3.1.0
+info:
+  title: Lyra API
+  version: 0.2.0
+  description: >-
+    Lyra conversation, model-provider, workspace, and native-agent API. Better Auth
+    owns /api/auth/*; WebSocket message details are documented in api.md.
+servers:
+  - url: /
+security:
+  - betterAuthCookie: []
+  - localBearer: []
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Lyra Hub is available.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { const: ok }
+                  service: { const: Lyra Hub }
+  /api/auth/status:
+    get:
+      operationId: getAuthStatus
+      security: []
+      responses:
+        '200':
+          description: Auth requirement and sign-up setting for the current deployment.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [required, signUpEnabled]
+                properties:
+                  required: { type: boolean }
+                  signUpEnabled: { type: boolean }
+  /api/auth/get-session:
+    get:
+      operationId: getAuthSession
+      security: []
+      description: Better Auth endpoint. Returns the current user/session or null.
+      responses:
+        '200': { description: Current Better Auth session or null. }
+  /api/auth/sign-in/email:
+    post:
+      operationId: signInEmail
+      security: []
+      description: Better Auth email/password sign-in endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200': { description: Signed in; Better Auth sets the session cookie. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/auth/sign-up/email:
+    post:
+      operationId: signUpEmail
+      security: []
+      description: Better Auth sign-up endpoint. Hosted Lyra disables sign-up by default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 8 }
+                callbackURL: { type: string, format: uri }
+      responses:
+        '200': { description: Account created; hosted accounts require email verification. }
+        '403': { description: Sign-up is disabled in this deployment. }
+  /api/auth/sign-out:
+    post:
+      operationId: signOut
+      security: []
+      description: Better Auth endpoint; clears the session cookie.
+      responses:
+        '200': { description: Signed out. }
+  /api/auth/request-password-reset:
+    post:
+      operationId: requestPasswordReset
+      security: []
+      description: Better Auth endpoint. Sends reset instructions through the configured email provider.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                redirectTo: { type: string, format: uri }
+      responses:
+        '200': { description: Reset email requested; response does not confirm whether the address exists. }
+  /api/auth/reset-password/{token}:
+    get:
+      operationId: verifyPasswordResetToken
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '302': { description: Better Auth redirects to the reset completion URL. }
+  /api/auth/reset-password:
+    post:
+      operationId: resetPassword
+      security: []
+      description: Better Auth password reset completion endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newPassword, token]
+              properties:
+                newPassword: { type: string, format: password }
+                token: { type: string }
+      responses:
+        '200': { description: Password updated. }
+  /api/agents/capabilities:
+    get:
+      operationId: getLegacyHarnessCapabilities
+      responses:
+        '200':
+          description: Installed legacy CLI harness capabilities.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/agents/readiness:
+    get:
+      operationId: getLegacyHarnessReadiness
+      responses:
+        '200':
+          description: Readiness for legacy CLI harnesses.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/agents/models:
+    get:
+      operationId: listLegacyHarnessModels
+      responses:
+        '200':
+          description: Models reported by installed legacy CLI harnesses.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/harness-profiles:
+    get:
+      operationId: listLegacyHarnessProfiles
+      responses:
+        '200':
+          description: Saved legacy CLI profiles; no provider credentials are returned.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/HarnessProfile' } }
+    post:
+      operationId: saveLegacyHarnessProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessProfileInput' }
+      responses:
+        '201': { description: Profile saved. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/harness-profiles/{profileId}:
+    delete:
+      operationId: deleteLegacyHarnessProfile
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '204': { description: Profile deleted. }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/model-provider-profiles:
+    get:
+      operationId: listModelProviderProfiles
+      responses:
+        '200':
+          description: Bedrock/OpenRouter connection metadata; secrets and secret references are omitted.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ModelProviderProfile' } }
+    post:
+      operationId: saveModelProviderProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelProviderProfileInput' }
+      responses:
+        '201': { description: Connection saved; secret values are not returned. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { description: Request body is too large. }
+  /api/model-provider-profiles/{profileId}:
+    delete:
+      operationId: deleteModelProviderProfile
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '204': { description: Connection deleted. }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/model-provider-profiles/{profileId}/compatibility:
+    get:
+      operationId: getModelCompatibility
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '200':
+          description: Latest compatibility result, or null if no check has run.
+          content:
+            application/json:
+              schema: { oneOf: [{ $ref: '#/components/schemas/CompatibilityResult' }, { type: 'null' }] }
+  /api/model-provider-profiles/{profileId}/compatibility-check:
+    post:
+      operationId: runModelCompatibilityCheck
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '200':
+          description: Synthetic provider/model compatibility results.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompatibilityResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/storage/config:
+    get:
+      operationId: getStorageConfig
+      responses:
+        '200':
+          description: Current Lyra file-storage path.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [storagePath]
+                properties: { storagePath: { type: string } }
+    post:
+      operationId: setStorageConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storagePath]
+              properties: { storagePath: { type: string, minLength: 1 } }
+      responses:
+        '200': { description: Storage path updated. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/workspaces/import:
+    post:
+      operationId: importPublicGithubRepository
+      description: Imports public GitHub repositories only; private repository auth is not available yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repoUrl, sessionId]
+              properties:
+                repoUrl: { type: string, format: uri }
+                sessionId: { type: string }
+      responses:
+        '200':
+          description: Repository workspace is ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workspacePath, repository]
+                properties:
+                  workspacePath: { type: string }
+                  repository: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/sessions:
+    get:
+      operationId: listSessions
+      responses:
+        '200':
+          description: Non-archived conversations.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/SessionMeta' } }
+    post:
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, workspacePath]
+              properties:
+                title: { type: string, maxLength: 120 }
+                workspacePath: { type: string }
+                activeAgents: { type: array, items: { type: string } }
+      responses:
+        '201': { description: Conversation created. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSession
+      responses:
+        '200':
+          description: Session metadata, ordered events, and persisted agent checkpoints.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Session metadata updated. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    delete:
+      operationId: deleteSession
+      responses:
+        '200': { description: Session deleted. }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/sessions/{sessionId}/events:
+    get:
+      operationId: listSessionEvents
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Up to 1,000 ordered events after the cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, nextCursor, hasMore]
+                properties:
+                  events: { type: array, items: { $ref: '#/components/schemas/SessionEvent' } }
+                  nextCursor: { type: integer }
+                  hasMore: { type: boolean }
+        '503': { description: PostgreSQL event history is unavailable. }
+  /api/sessions/{sessionId}/agent-checkpoints:
+    get:
+      operationId: listAgentCheckpoints
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Ordered run checkpoints used for recovery.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AgentCheckpoint' } }
+  /api/sessions/{sessionId}/runs:
+    get:
+      operationId: listLegacyTeamRuns
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200': { description: Legacy CLI team runs. }
+  /api/sessions/{sessionId}/runs/{runId}:
+    get:
+      operationId: getLegacyTeamRun
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Legacy CLI team run record. }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    betterAuthCookie:
+      type: apiKey
+      in: cookie
+      name: better-auth.session_token
+      description: Better Auth hosted session cookie; Better Auth may apply secure cookie prefixes.
+    localBearer:
+      type: http
+      scheme: bearer
+      description: Local development compatibility only; hosted requests use Better Auth.
+  parameters:
+    ProfileId:
+      name: profileId
+      in: path
+      required: true
+      schema: { type: string }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid input or unavailable capability.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid authentication.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+    SessionMeta:
+      type: object
+      required: [id, title, createdAt, updatedAt, workspacePath, activeAgents]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        workspacePath: { type: string }
+        activeAgents: { type: array, items: { type: string } }
+        archived: { type: boolean }
+        mode: { type: string, enum: [solo, team] }
+        teamConfig: { type: object, additionalProperties: true }
+    SessionDetail:
+      type: object
+      required: [meta, events, agentCheckpoints]
+      properties:
+        meta: { $ref: '#/components/schemas/SessionMeta' }
+        events: { type: array, items: { $ref: '#/components/schemas/SessionEvent' } }
+        agentCheckpoints: { type: array, items: { $ref: '#/components/schemas/AgentCheckpoint' } }
+    SessionEvent:
+      type: object
+      required: [eventId, sessionId, sequence, timestamp, agent, type, payload]
+      properties:
+        eventId: { type: string }
+        sessionId: { type: string }
+        sequence: { type: integer }
+        timestamp: { type: string, format: date-time }
+        agent: { type: string }
+        type: { type: string }
+        runId: { type: string }
+        payload: {}
+    AgentCheckpoint:
+      type: object
+      required: [sessionId, runId, checkpointId, kind, sequence, timestamp, workspacePath, state]
+      properties:
+        sessionId: { type: string }
+        runId: { type: string }
+        checkpointId: { type: string }
+        kind: { type: string }
+        sequence: { type: integer }
+        timestamp: { type: string, format: date-time }
+        workspacePath: { type: string }
+        state: { type: string, enum: [running, paused, completed, needs-attention, failed] }
+        detail: { type: string }
+    HarnessProfile:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        harness: { type: string, enum: [antigravity, claude_code, codex, opencode, hermes] }
+        enabled: { type: boolean }
+        model: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HarnessProfileInput:
+      type: object
+      required: [name, harness]
+      properties:
+        name: { type: string, maxLength: 80 }
+        harness: { type: string, enum: [antigravity, claude_code, codex, opencode, hermes] }
+        enabled: { type: boolean }
+        model: { type: string, maxLength: 160 }
+    ModelProviderProfile:
+      type: object
+      required: [id, name, provider, credentialMode, model, hasCredential, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        provider: { type: string, enum: [bedrock, openrouter] }
+        credentialMode: { type: string, enum: [byo, managed] }
+        region: { type: string }
+        model: { type: string }
+        roleArn: { type: string }
+        hasCredential: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ModelProviderProfileInput:
+      type: object
+      required: [name, provider, credentialMode, model]
+      properties:
+        id: { type: string }
+        name: { type: string, maxLength: 80 }
+        provider: { type: string, enum: [bedrock, openrouter] }
+        credentialMode: { type: string, enum: [byo, managed] }
+        region: { type: string }
+        model: { type: string, maxLength: 200 }
+        roleArn: { type: string }
+        externalId: { type: string, writeOnly: true }
+        apiKey: { type: string, writeOnly: true }
+    CompatibilityResult:
+      type: object
+      required: [provider, model, tier, capabilities, testedAt, suiteVersion, warnings]
+      properties:
+        profileId: { type: string }
+        provider: { type: string, enum: [bedrock, openrouter] }
+        model: { type: string }
+        tier: { type: string, enum: [full, limited] }
+        capabilities: { type: object, additionalProperties: { type: object, properties: { passed: { type: boolean }, detail: { type: string } } } }
+        testedAt: { type: string, format: date-time }
+        suiteVersion: { type: string }
+        warnings: { type: array, items: { type: string } }

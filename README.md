@@ -1,95 +1,116 @@
-# Lyra — Multi-Agent Developer Interface
+# Lyra — Autonomous Cloud Swarm & Orchestration Engine
 
-Lyra is a minimal, typography-first desktop & web workspace for developers using **Antigravity CLI**, **Claude Code**, and **Codex CLI**.
+Lyra is a **headless, harness-agnostic autonomous engineering platform** designed to execute complex, multi-stage software development swarms in the cloud while preserving zero disruption on your local workspace.
 
-It replaces noisy terminal escape sequences with a clean, high-contrast engineering interface featuring native Mermaid diagram rendering, live reasoning streams, collapsible tool execution cards, side-by-side git diffs, and an autonomous inter-agent dispatch bridge.
+Rather than competing with developer chat interfaces, Lyra plugs directly into **Google Antigravity**, **OpenAI Codex CLI**, **Claude Code**, and **Cursor** via an **11-tool Model Context Protocol (MCP) server** and secure REST gateway.
 
 ---
 
-## ⚡ Features
+## 🏛️ Architecture at a Glance
 
-- **Noisy Terminal Stripping**: Converts raw CLI streams and JSONL trajectories into clean markdown with typography and syntax highlighting.
-- **Native Mermaid Vector Diagrams**: Automatically renders architecture charts, entity relationships, sequence diagrams, and state machines directly in the response.
-- **Collapsible Reasoning Streams**: Non-intrusive disclosure panels for model thinking and chain-of-thought traces.
-- **Structured Tool Call Cards**: Inspect bash executions, file edits, and codebase grep operations with status badges and inputs/outputs.
-- **Cross-Agent Dispatch Bridge**: Seamlessly pass architectural plans and task breakdowns from Antigravity (as planner/lead) to Claude Code (as implementer) and Codex (for automated tests).
-- **Live Antigravity Transcript Watcher**: Connects to `~/.gemini/antigravity-cli/brain/` to automatically mirror active terminal agent runs in real time.
+```mermaid
+flowchart LR
+    subgraph LocalMachine ["Developer Machine"]
+        Harness["Antigravity / Codex / Cursor"]
+        MCP["Lyra MCP Server (11 Tools)"]
+        UI["Mission Control Dashboard (:5173)"]
+    end
+
+    subgraph CoreEngine ["Lyra Orchestration Engine (:3001)"]
+        GW["API Gateway & Rate Limiter"]
+        TC["TeamCoordinator & DAG Scheduler"]
+        WM["Shadow Git Worktrees"]
+        CARE["Maintenance Caretaker"]
+        STORE["UnifiedStore & Checkpoints"]
+    end
+
+    subgraph Cloud ["AWS Cloud Stack"]
+        Bedrock["AWS Bedrock (Claude 3.7 / Sonnet)"]
+        Guard["AWS Bedrock Guardrails"]
+        S3["AWS S3 Ephemeral Previews"]
+        FinOps["CloudWatch FinOps Ceilings"]
+    end
+
+    Harness <--> MCP
+    MCP <--> GW
+    UI <--> GW
+    GW <--> TC
+    TC <--> WM
+    TC <--> Bedrock
+    TC <--> CARE
+    TC <--> STORE
+    GW -.-> Guard
+    TC -.-> S3
+    GW -.-> FinOps
+```
+
+For complete architectural deep-dives, sequence diagrams, and lifecycle details, see [docs/architecture-and-features.md](docs/architecture-and-features.md).
+
+---
+
+## ⚡ Core Capabilities
+
+- **Headless MCP Integration (11 Standardized Tools)**: Dispatch swarms (`lyra_dispatch_task`), stream diffs (`lyra_inspect_diff`), resolve merge conflicts (`lyra_resolve_conflict`), run dynamic QA fuzzing (`lyra_run_qa_sandbox`), and open GitHub Pull Requests (`lyra_create_github_pr`).
+- **Zero-Disruption Shadow Worktrees**: Workers execute in isolated Git worktrees (`.lyra/worktrees/*`). Your local working tree, branch, and staged files are never modified during execution.
+- **Task Resiliency & Checkpoint Resume**: Fault-tolerant state machine surviving laptop sleep, process restarts, rate limits, and AWS Spot container evictions. Succeeded tasks are never re-run.
+- **AWS Bedrock Guardrails**: Scans prompts, shell commands, and model completions to block secret leakage (AWS keys, GitHub tokens, private keys) and destructive commands (`rm -rf`, disk wipes).
+- **Ephemeral S3 Previews**: Deploys static build artifacts to `s3://<bucket>/previews/<tenant>/<runId>/index.html` with CloudFront CDN links embedded directly in PRs.
+- **FinOps Spend Ceilings**: Real-time AWS CloudFormation cost estimator with configurable per-run ($2.00) and monthly ($25.00) budget caps that halt runaway model spend.
+- **Autonomous Grounded Codebase Caretaker**: Audits and refactors deprecated JavaScript/TypeScript APIs and outdated packages strictly grounded in official documentation (MDN, Node docs, GitHub Releases).
+- **Lyra Mission Control**: High-contrast, 2-tab web dashboard displaying live swarms, collapsible diffs, test check status, token/USD telemetry, and AWS settings.
 
 ---
 
 ## 🚀 Quickstart
 
 ### Prerequisites
-- Node.js (v20+) or Bun (v1.2+)
+- [Bun](https://bun.sh) (v1.2+) or Node.js (v20+)
+- Git installed and available on PATH
+- AWS credentials configured (optional, for Bedrock cloud execution)
 
-### Starting Lyra
-In the project directory:
-
+### 1. Start the Gateway and Mission Control
 ```bash
-cd /Users/taufeeqali/projects/Lyra
 bun run dev
-# or npm run dev
+```
+- **Lyra Gateway & Hub**: `http://localhost:3001`
+- **Lyra Mission Control**: `http://localhost:5173`
+
+### 2. Verify System Health & Run Tests
+```bash
+# Typecheck validation (0 errors)
+bun run typecheck
+
+# Full test suite (89 passing tests across 29 test suites)
+bun test
+
+# Live end-to-end simulation
+bun run scripts/demo-harness-integration.ts
 ```
 
-This starts both:
-1. **Lyra Hub (WebSocket/Process Server)** on `http://localhost:3001`
-2. **Lyra UI (Vite Frontend)** on `http://localhost:5173`
+### 3. Connect to Antigravity, Cursor, or Claude Code
+Add to your MCP settings (`antigravity.json` or `claude_desktop_config.json`):
 
-Open `http://localhost:5173` in your browser.
-
-### Safety and runtime configuration
-
-Agent runs default to `safe` mode. Dangerous CLI bypass flags are only enabled when both
-the session requests `unrestricted` mode and `LYRA_ENABLE_UNRESTRICTED=true` is set on the
-server. Use `LYRA_AGENT_TIMEOUT_MS` to configure the maximum run duration.
-
-For a protected hub deployment, set `LYRA_AUTH_TOKEN`; API requests must send it as a
-Bearer token and WebSocket clients may provide it as a bearer header or `?token=` query
-parameter. This token gate is intended as a deployment bridge; a complete OIDC provider
-integration remains a follow-up before exposing Lyra to multiple users.
-
-For the Vite client to attach the token automatically, also set
-`VITE_LYRA_AUTH_TOKEN` when starting the UI.
-
-See [`docs/cli-capabilities.md`](docs/cli-capabilities.md) for the locally verified agent
-CLI options and current Lyra forwarding support.
-
-### Linux Docker deployment
-
-On the Linux server, run `./setup-server.sh`. The script interactively selects which CLIs
-to install, builds the image, starts Lyra, and then launches each selected CLI's own login
-flow. Antigravity's official Linux/macOS installer is used, Codex is installed from its
-official npm package, and Claude Code is installed from Anthropic's official npm package.
-Credentials are kept in Docker volumes rather than committed to the image.
-
----
-
-## 📁 Architecture Overview
-
-```
-Lyra/
-├── src/
-│   ├── components/
-│   │   ├── MermaidDiagram.tsx      # Interactive vector SVG diagram renderer
-│   │   ├── ToolExecutionCard.tsx   # Clean tool invocation inspector
-│   │   ├── DiffViewer.tsx          # Minimal patch / file diff viewer
-│   │   ├── MessageItem.tsx         # Markdown, code blocks & handoff triggers
-│   │   ├── AgentSelector.tsx       # Switch between Antigravity, Claude, Codex
-│   │   ├── MultiAgentBridge.tsx    # Autonomous cross-agent pipeline coordinator
-│   │   ├── Sidebar.tsx             # Workspace selector & agent engine statuses
-│   │   └── ChatView.tsx            # Main stream console and prompt input
-│   ├── types/                      # Shared session and message schemas
-│   └── App.tsx                     # Main layout & WebSocket event loop
-├── server/
-│   ├── antigravityWatcher.ts       # Watches ~/.gemini/antigravity-cli/brain/
-│   ├── processManager.ts           # Subprocess / SDK runner
-│   ├── messageBus.ts               # Inter-agent task queue
-│   └── index.ts                    # WebSocket & HTTP API hub
+```json
+{
+  "mcpServers": {
+    "lyra_harness": {
+      "command": "bun",
+      "args": [
+        "run",
+        "/Users/taufeeqali/Projects/Lyra/scripts/mcp-server-stdio.ts"
+      ],
+      "env": {
+        "LYRA_GATEWAY_URL": "http://localhost:3001",
+        "LYRA_GATEWAY_API_KEY": "lyra-harness-default-secret"
+      }
+    }
+  }
+}
 ```
 
 ---
 
-## 🛠 Design Philosophy
-
-- **Zero "Vibe-Coded" Fluff**: No neon gradients, artificial glowing bubbles, or generic AI chat illustrations.
-- **Utilitarian & Minimal**: Monochromatic neutral palette (Zinc / Neutral 950), crisp 1px borders, compact padding, and monospace fonts for technical data.
+## 📚 Documentation
+- [Architecture & Feature Master Guide](docs/architecture-and-features.md)
+- [REST API Gateway Specification](docs/api.md)
+- [OpenAPI 3.0 Schema](docs/openapi.yaml)

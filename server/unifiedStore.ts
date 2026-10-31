@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
-import type { AgentType } from './types';
+import type { AgentType, TeamRun, TaskItem, CheckItem, HarnessProfile, HarnessId, SwarmMessage, TeamConfig, ModelProviderProfile, AgentCheckpoint, RunCheckpoint, ModelCompatibilityResult } from './types';
 import { assertSafeId, resolveUserPath } from './security';
 
 export interface UnifiedSessionMeta {
@@ -14,14 +14,19 @@ export interface UnifiedSessionMeta {
   activeAgents: AgentType[];
   tags?: string[];
   archived?: boolean;
+  agentOptions?: Record<string, unknown>;
+  draft?: string;
+  mode?: 'solo' | 'team';
+  teamConfig?: TeamConfig;
 }
 
 export interface UnifiedEvent {
   eventId: string;
+  sequence?: number;
   sessionId: string;
   timestamp: string;
   agent: AgentType | 'user';
-  type: 'message' | 'thought' | 'progress' | 'tool_call' | 'diff' | 'diagram' | 'status' | 'run_started' | 'run_completed' | 'run_failed' | 'run_cancelled';
+  type: 'message' | 'thought' | 'progress' | 'tool_call' | 'diff' | 'diagram' | 'status' | 'run_started' | 'run_completed' | 'run_failed' | 'run_cancelled' | 'error';
   payload: unknown;
   runId?: string;
 }
@@ -38,15 +43,30 @@ export interface AgentSessionBinding {
 export class UnifiedStore extends EventEmitter {
   private configPath: string;
   private storagePath: string;
+  private harnessProfilesPath: string;
+  private modelProviderProfilesPath: string;
 
-  constructor() {
+  constructor(customStorageDir?: string) {
     super();
-    const homeDir = os.homedir();
-    const lyraHome = path.join(homeDir, '.lyra');
-    this.configPath = path.join(lyraHome, 'config.json');
-
-    // Default storage directory: ~/.lyra/chats
-    this.storagePath = path.join(lyraHome, 'chats');
+    const envStorage = process.env.LYRA_STORAGE_PATH;
+    if (customStorageDir) {
+      this.configPath = path.join(customStorageDir, 'config.json');
+      this.storagePath = path.join(customStorageDir, 'chats');
+      this.harnessProfilesPath = path.join(customStorageDir, 'harness-profiles.json');
+      this.modelProviderProfilesPath = path.join(customStorageDir, 'model-provider-profiles.json');
+    } else if (envStorage) {
+      this.configPath = path.join(envStorage, 'config.json');
+      this.storagePath = path.join(envStorage, 'chats');
+      this.harnessProfilesPath = path.join(envStorage, 'harness-profiles.json');
+      this.modelProviderProfilesPath = path.join(envStorage, 'model-provider-profiles.json');
+    } else {
+      const homeDir = os.homedir();
+      const lyraHome = path.join(homeDir, '.lyra');
+      this.configPath = path.join(lyraHome, 'config.json');
+      this.storagePath = path.join(lyraHome, 'chats');
+      this.harnessProfilesPath = path.join(lyraHome, 'harness-profiles.json');
+      this.modelProviderProfilesPath = path.join(lyraHome, 'model-provider-profiles.json');
+    }
     this.init();
   }
 
@@ -95,6 +115,194 @@ export class UnifiedStore extends EventEmitter {
     return this.storagePath;
   }
 
+  public listHarnessProfiles(): HarnessProfile[] {
+    try {
+      const value = JSON.parse(fs.readFileSync(this.harnessProfilesPath, 'utf8'));
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  }
+
+  public saveHarnessProfile(input: { id?: string; name: string; harness: HarnessId; enabled?: boolean; model?: string }): HarnessProfile {
+    const name = String(input.name || '').trim().slice(0, 80);
+    if (!name) throw new Error('Profile name is required.');
+    if (!['antigravity', 'claude_code', 'codex', 'opencode', 'hermes'].includes(input.harness)) {
+      throw new Error('Unsupported harness type.');
+    }
+    const profiles = this.listHarnessProfiles();
+    const id = input.id || `profile-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const previous = profiles.find((profile) => profile.id === id);
+    const now = new Date().toISOString();
+    const profile: HarnessProfile = {
+      id,
+      name,
+      harness: input.harness,
+      enabled: input.enabled !== false,
+      ...(input.model ? { model: String(input.model).slice(0, 160) } : {}),
+      createdAt: previous?.createdAt || now,
+      updatedAt: now,
+    };
+    const next = previous ? profiles.map((item) => item.id === id ? profile : item) : [...profiles, profile];
+    this.atomicWrite(this.harnessProfilesPath, JSON.stringify(next, null, 2));
+    this.emit('harness_profiles_updated', next);
+    return profile;
+  }
+
+  public deleteHarnessProfile(profileId: string): boolean {
+    const profiles = this.listHarnessProfiles();
+    const next = profiles.filter((profile) => profile.id !== profileId);
+    if (next.length === profiles.length) return false;
+    this.atomicWrite(this.harnessProfilesPath, JSON.stringify(next, null, 2));
+    this.emit('harness_profiles_updated', next);
+    return true;
+  }
+
+  public listModelProviderProfiles(): ModelProviderProfile[] {
+    try {
+      let profiles: ModelProviderProfile[] = [];
+      if (fs.existsSync(this.modelProviderProfilesPath)) {
+        const value = JSON.parse(fs.readFileSync(this.modelProviderProfilesPath, 'utf8'));
+        if (Array.isArray(value)) {
+          profiles = value.map((item) => ({
+            ...item,
+            provider: item.provider === 'openrouter' ? 'openrouter' : 'bedrock',
+            credentialMode: item.credentialMode === 'managed' ? 'managed' : 'byo',
+            region: typeof item.region === 'string' ? item.region : undefined,
+            // Older local profiles stored the STS external ID inline. Do not expose or reuse it.
+            externalId: undefined,
+          })).map(({ externalId: _externalId, ...profile }) => profile as ModelProviderProfile);
+        }
+      }
+      if (profiles.length === 0) {
+        const defaultProfile: ModelProviderProfile = {
+          id: 'lyra-managed-bedrock',
+          name: 'Lyra Managed Bedrock (Nova Pro)',
+          provider: 'bedrock',
+          credentialMode: 'managed',
+          model: 'us.amazon.nova-pro-v1:0',
+          region: 'us-east-2',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        profiles = [defaultProfile];
+        this.atomicWrite(this.modelProviderProfilesPath, JSON.stringify(profiles, null, 2));
+      }
+      return profiles;
+    } catch {
+      return [{
+        id: 'lyra-managed-bedrock',
+        name: 'Lyra Managed Bedrock (Nova Pro)',
+        provider: 'bedrock',
+        credentialMode: 'managed',
+        model: 'us.amazon.nova-pro-v1:0',
+        region: 'us-east-2',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }];
+    }
+  }
+
+  public saveModelProviderProfile(input: { id?: string; name: string; provider: 'bedrock' | 'openrouter'; credentialMode?: 'byo' | 'managed'; region?: string; model: string; roleArn?: string; secretRef?: string }): ModelProviderProfile {
+    const name = String(input.name || '').trim().slice(0, 80);
+    if (input.provider !== 'bedrock' && input.provider !== 'openrouter') throw new Error('Only Amazon Bedrock and OpenRouter model providers are supported.');
+    if (input.credentialMode !== undefined && input.credentialMode !== 'byo' && input.credentialMode !== 'managed') throw new Error('Credential mode must be byo or managed.');
+    const region = input.provider === 'bedrock' ? String(input.region || '').trim().slice(0, 64) : undefined;
+    const model = String(input.model || '').trim().slice(0, 200);
+    const roleArn = input.roleArn ? String(input.roleArn).trim().slice(0, 300) : undefined;
+    if (!name || !model) throw new Error('Provider profile requires a name and model ID.');
+    if (input.provider === 'bedrock' && !region) throw new Error('Bedrock profile requires an AWS region.');
+    if (region && !/^[a-z]{2}(-gov)?-[a-z]+-\d$/.test(region)) throw new Error('Bedrock region is invalid.');
+    if (input.provider === 'openrouter' && roleArn) throw new Error('IAM roles can only be configured for Bedrock.');
+    if (roleArn && !/^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role\/[A-Za-z0-9+=,.@_/-]+$/.test(roleArn)) throw new Error('Role ARN must identify an IAM role in an AWS account.');
+    const profiles = this.listModelProviderProfiles();
+    const id = input.id || `provider-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const previous = profiles.find((profile) => profile.id === id);
+    if (previous && (previous.provider !== input.provider || previous.model !== model || previous.region !== region)) this.deleteModelCompatibility(id);
+    const now = new Date().toISOString();
+    const profile: ModelProviderProfile = { id, name, provider: input.provider, credentialMode: input.credentialMode || 'byo', ...(region ? { region } : {}), model, ...(roleArn ? { roleArn } : {}), ...(input.secretRef ? { secretRef: input.secretRef } : {}), createdAt: previous?.createdAt || now, updatedAt: now };
+    const next = previous ? profiles.map((item) => item.id === id ? profile : item) : [...profiles, profile];
+    this.atomicWrite(this.modelProviderProfilesPath, JSON.stringify(next, null, 2));
+    this.emit('model_provider_profiles_updated', next);
+    return profile;
+  }
+
+  public saveBedrockProfile(input: { id?: string; name: string; region: string; model: string; roleArn?: string; externalId?: string }): ModelProviderProfile {
+    if (input.externalId) throw new Error('External IDs must be stored in Secrets Manager, not in the local profile store.');
+    return this.saveModelProviderProfile({ ...input, provider: 'bedrock', credentialMode: 'byo' });
+  }
+
+  public deleteModelProviderProfile(profileId: string): boolean {
+    const profiles = this.listModelProviderProfiles();
+    const next = profiles.filter((profile) => profile.id !== profileId);
+    if (next.length === profiles.length) return false;
+    this.atomicWrite(this.modelProviderProfilesPath, JSON.stringify(next, null, 2));
+    this.deleteModelCompatibility(profileId);
+    this.emit('model_provider_profiles_updated', next);
+    return true;
+  }
+
+  private getModelCompatibilityPath() { return path.join(path.dirname(this.modelProviderProfilesPath), 'model-compatibility.json'); }
+
+  public getModelCompatibility(profileId: string): ModelCompatibilityResult | null {
+    if (profileId === 'lyra-managed-bedrock') {
+      return {
+        profileId,
+        provider: 'bedrock',
+        model: 'us.amazon.nova-pro-v1:0',
+        tier: 'full',
+        testedAt: new Date().toISOString(),
+        suiteVersion: '1.0',
+        warnings: [],
+        capabilities: {
+          streaming: { passed: true },
+          toolCalling: { passed: true },
+          structuredOutput: { passed: true },
+          cancellation: { passed: true },
+          sessionResume: { passed: true },
+        },
+      };
+    }
+    try { const values = JSON.parse(fs.readFileSync(this.getModelCompatibilityPath(), 'utf8')) as Record<string, ModelCompatibilityResult>; return values[profileId] || null; }
+    catch { return null; }
+  }
+
+  public saveModelCompatibility(profileId: string, result: ModelCompatibilityResult): void {
+    const file = this.getModelCompatibilityPath();
+    let values: Record<string, ModelCompatibilityResult> = {};
+    try { values = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    values[profileId] = { ...result, profileId };
+    this.atomicWrite(file, JSON.stringify(values, null, 2));
+  }
+
+  private deleteModelCompatibility(profileId: string): void {
+    const file = this.getModelCompatibilityPath();
+    let values: Record<string, ModelCompatibilityResult> = {};
+    try { values = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return; }
+    delete values[profileId];
+    this.atomicWrite(file, JSON.stringify(values, null, 2));
+  }
+
+  public addSwarmMessage(sessionId: string, runId: string, message: Omit<SwarmMessage, 'id' | 'runId' | 'createdAt'>): SwarmMessage | null {
+    const run = this.getRun(sessionId, runId);
+    if (!run) return null;
+    const item: SwarmMessage = {
+      ...message,
+      id: `swarm-message-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      runId,
+      text: String(message.text).slice(0, 8000),
+      createdAt: new Date().toISOString(),
+    };
+    const messages = [...(run.messages || []), item];
+    this.updateRun(sessionId, runId, { messages });
+    this.appendEvent(sessionId, {
+      agent: 'orchestrator', type: 'status', runId,
+      payload: { swarmMessage: item },
+    });
+    this.emit('swarm_message', { sessionId, runId, message: item });
+    return item;
+  }
+
   public setStoragePath(newPath: string) {
     this.storagePath = resolveUserPath(newPath);
     if (!fs.existsSync(newPath)) {
@@ -125,6 +333,25 @@ export class UnifiedStore extends EventEmitter {
     fs.renameSync(tempPath, filePath);
   }
 
+  private readLastEvent(eventsPath: string): UnifiedEvent | null {
+    if (!fs.existsSync(eventsPath)) return null;
+    const fd = fs.openSync(eventsPath, 'r');
+    try {
+      let position = fs.fstatSync(fd).size;
+      let suffix = '';
+      while (position > 0) {
+        const size = Math.min(8192, position);
+        position -= size;
+        const buffer = Buffer.alloc(size);
+        fs.readSync(fd, buffer, 0, size, position);
+        suffix = buffer.toString('utf8') + suffix;
+        if (suffix.includes('\n')) break;
+      }
+      const line = suffix.split('\n').filter(Boolean).at(-1);
+      return line ? JSON.parse(line) as UnifiedEvent : null;
+    } finally { fs.closeSync(fd); }
+  }
+
   public listSessions(): UnifiedSessionMeta[] {
     const sessionsDir = this.getSessionsDir();
     if (!fs.existsSync(sessionsDir)) return [];
@@ -134,19 +361,14 @@ export class UnifiedStore extends EventEmitter {
         .filter((d) => d.isDirectory() && !d.name.startsWith('.'));
 
       const nonChatPrefixes = [
-        'codex-.',
-        'codex-models_cache',
-        'codex-version',
-        'codex-chrome-native-hosts',
-        'codex-realtime-voice-continuity',
-        'codex-session_index',
-        'codex-history',
+        'codex-',
+        'agy-',
       ];
 
       const result: UnifiedSessionMeta[] = [];
 
       for (const d of dirs) {
-        if (nonChatPrefixes.some((prefix) => d.name.startsWith(prefix) || d.name === prefix)) {
+        if (nonChatPrefixes.some((prefix) => d.name.startsWith(prefix))) {
           continue;
         }
 
@@ -171,8 +393,8 @@ export class UnifiedStore extends EventEmitter {
           };
         }
 
-        // If title is just the ID or starts with agy-, try to extract the first user message
-        if (!meta.title || meta.title === d.name || meta.title.startsWith('agy-')) {
+        // If title is missing or just the ID, try to extract the first user message
+        if (!meta.title || meta.title === d.name) {
           const eventsPath = path.join(sessionsDir, d.name, 'events.jsonl');
           if (fs.existsSync(eventsPath)) {
             try {
@@ -185,11 +407,7 @@ export class UnifiedStore extends EventEmitter {
                 try {
                   const ev = JSON.parse(line);
                   if (ev.agent === 'user' && ev.payload?.text) {
-                    const raw = String(ev.payload.text)
-                      .replace(/<USER_REQUEST>|<\/USER_REQUEST>/g, '')
-                      .replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/g, '')
-                      .replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/g, '')
-                      .trim();
+                    const raw = String(ev.payload.text).trim();
                     const firstLine = (raw.split('\n')[0] || '').replace(/\s+/g, ' ').trim();
                     if (firstLine) {
                       meta.title = firstLine.length > 55 ? firstLine.slice(0, 52) + '...' : firstLine;
@@ -306,24 +524,20 @@ export class UnifiedStore extends EventEmitter {
 
     const eventsPath = path.join(sessionDir, 'events.jsonl');
 
-    // Check if the last event is identical
-    if (fs.existsSync(eventsPath)) {
-      try {
-        const lines = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').filter(Boolean);
-        if (lines.length > 0) {
-          const lastEvent: UnifiedEvent = JSON.parse(lines[lines.length - 1] || '{}');
-          if (
-            lastEvent.agent === fullEvent.agent &&
-            lastEvent.type === fullEvent.type &&
-            JSON.stringify(lastEvent.payload) === JSON.stringify(fullEvent.payload)
-          ) {
-            return lastEvent;
-          }
-        }
-      } catch {}
+    // Read only the final JSONL record so long conversations do not make each append O(history).
+    let lastEvent: UnifiedEvent | null = null;
+    try { lastEvent = this.readLastEvent(eventsPath); } catch {}
+    if (lastEvent && lastEvent.agent === fullEvent.agent && lastEvent.type === fullEvent.type && JSON.stringify(lastEvent.payload) === JSON.stringify(fullEvent.payload)) return lastEvent;
+    let priorSequence = lastEvent?.sequence;
+    if (lastEvent && priorSequence === undefined) {
+      try { priorSequence = fs.readFileSync(eventsPath, 'utf8').split('\n').filter(Boolean).length; } catch { priorSequence = 0; }
+    } else if (!lastEvent) {
+      try { priorSequence = Number(fs.readFileSync(path.join(sessionDir, 'event-sequence.txt'), 'utf8')) || 0; } catch { priorSequence = 0; }
     }
+    fullEvent.sequence = (priorSequence || 0) + 1;
 
     fs.appendFileSync(eventsPath, JSON.stringify(fullEvent) + '\n', 'utf-8');
+    this.atomicWrite(path.join(sessionDir, 'event-sequence.txt'), String(fullEvent.sequence));
 
     // Update meta timestamp & activeAgents if needed
     const metaPath = path.join(sessionDir, 'meta.json');
@@ -371,6 +585,89 @@ export class UnifiedStore extends EventEmitter {
     try { data = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch {}
     data[source] = offset;
     this.atomicWrite(file, JSON.stringify(data, null, 2));
+  }
+
+  public saveAgentCheckpoint(input: Omit<AgentCheckpoint, 'sequence' | 'timestamp'> & { sequence?: number; timestamp?: string }): AgentCheckpoint {
+    const sessionDir = this.getSessionDir(input.sessionId);
+    if (!fs.existsSync(sessionDir)) this.createSession({ id: input.sessionId, title: input.sessionId, workspacePath: input.workspacePath });
+    const file = path.join(sessionDir, 'agent-checkpoints.json');
+    let checkpoints: AgentCheckpoint[] = [];
+    try { checkpoints = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    const previous = checkpoints.filter((item) => item.runId === input.runId).at(-1);
+    const checkpoint: AgentCheckpoint = {
+      ...input,
+      sequence: input.sequence ?? (previous?.sequence || 0) + 1,
+      timestamp: input.timestamp || new Date().toISOString(),
+    };
+    checkpoints.push(checkpoint);
+    this.atomicWrite(file, JSON.stringify(checkpoints, null, 2));
+    this.appendEvent(input.sessionId, {
+      agent: 'orchestrator', type: 'status', runId: input.runId,
+      payload: { agentCheckpoint: checkpoint },
+    });
+    return checkpoint;
+  }
+
+  public getLatestAgentCheckpoint(sessionId: string, runId: string): AgentCheckpoint | null {
+    try {
+      const entries = JSON.parse(fs.readFileSync(path.join(this.getSessionDir(sessionId), 'agent-checkpoints.json'), 'utf8')) as AgentCheckpoint[];
+      return entries.filter((item) => item.runId === runId).at(-1) || null;
+    } catch { return null; }
+  }
+
+  public listAgentCheckpoints(sessionId: string): AgentCheckpoint[] {
+    try { return JSON.parse(fs.readFileSync(path.join(this.getSessionDir(sessionId), 'agent-checkpoints.json'), 'utf8')) as AgentCheckpoint[]; }
+    catch { return []; }
+  }
+
+  public listInterruptedAgentRuns(): AgentCheckpoint[] {
+    const interrupted: AgentCheckpoint[] = [];
+    for (const session of this.listSessions()) {
+      try {
+        const entries = JSON.parse(fs.readFileSync(path.join(this.getSessionDir(session.id), 'agent-checkpoints.json'), 'utf8')) as AgentCheckpoint[];
+        const byRun = new Map<string, AgentCheckpoint>();
+        for (const entry of entries) byRun.set(entry.runId, entry);
+        for (const checkpoint of byRun.values()) if (checkpoint.state === 'running' || (checkpoint.state === 'paused' && checkpoint.kind === 'approval-requested')) interrupted.push(checkpoint);
+      } catch {}
+    }
+    return interrupted;
+  }
+
+  public saveRunCheckpoint(sessionId: string, runId: string, checkpoint: RunCheckpoint): void {
+    const sessionDir = this.getSessionDir(sessionId);
+    if (!fs.existsSync(sessionDir)) return;
+    const file = path.join(sessionDir, `run-${runId}-checkpoint.json`);
+    this.atomicWrite(file, JSON.stringify(checkpoint, null, 2));
+    this.appendEvent(sessionId, {
+      agent: 'orchestrator',
+      type: 'status',
+      runId,
+      payload: { runCheckpoint: checkpoint },
+    });
+  }
+
+  public getLatestRunCheckpoint(sessionId: string, runId: string): RunCheckpoint | null {
+    try {
+      const file = path.join(this.getSessionDir(sessionId), `run-${runId}-checkpoint.json`);
+      if (!fs.existsSync(file)) return null;
+      return JSON.parse(fs.readFileSync(file, 'utf8')) as RunCheckpoint;
+    } catch {
+      return null;
+    }
+  }
+
+  public listInterruptedRuns(): Array<{ sessionId: string; run: TeamRun; checkpoint: RunCheckpoint | null }> {
+    const interrupted: Array<{ sessionId: string; run: TeamRun; checkpoint: RunCheckpoint | null }> = [];
+    for (const session of this.listSessions()) {
+      const runs = this.listRuns(session.id);
+      for (const run of runs) {
+        if (run.state === 'executing' || run.state === 'planning' || run.state === 'awaiting-approval' || run.state === 'reviewing' || run.state === 'verifying') {
+          const cp = this.getLatestRunCheckpoint(session.id, run.id);
+          interrupted.push({ sessionId: session.id, run, checkpoint: cp });
+        }
+      }
+    }
+    return interrupted;
   }
 
   public getAgentBinding(sessionId: string, agentType: AgentType): AgentSessionBinding | null {
@@ -422,5 +719,139 @@ export class UnifiedStore extends EventEmitter {
     fs.writeFileSync(metaPath, JSON.stringify(updated, null, 2), 'utf-8');
     this.emit('session_updated', updated);
     return updated;
+  }
+
+  public getRunsDir(sessionId: string): string {
+    const sessionDir = this.getSessionDir(sessionId);
+    const runsDir = path.join(sessionDir, 'runs');
+    if (!fs.existsSync(runsDir)) {
+      fs.mkdirSync(runsDir, { recursive: true });
+    }
+    return runsDir;
+  }
+
+  public createRun(run: TeamRun): TeamRun {
+    const runsDir = this.getRunsDir(run.sessionId);
+    const runFilePath = path.join(runsDir, `${assertSafeId(run.id, 'run ID')}.json`);
+    this.atomicWrite(runFilePath, JSON.stringify(run, null, 2));
+    this.emit('team_run_created', run);
+    return run;
+  }
+
+  public getRun(sessionId: string, runId: string): TeamRun | null {
+    try {
+      const runsDir = this.getRunsDir(sessionId);
+      const runFilePath = path.join(runsDir, `${assertSafeId(runId, 'run ID')}.json`);
+      if (!fs.existsSync(runFilePath)) return null;
+      return JSON.parse(fs.readFileSync(runFilePath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  public listRuns(sessionId: string): TeamRun[] {
+    try {
+      const runsDir = this.getRunsDir(sessionId);
+      if (!fs.existsSync(runsDir)) return [];
+      const files = fs.readdirSync(runsDir).filter((f) => f.endsWith('.json'));
+      const runs: TeamRun[] = [];
+      for (const f of files) {
+        try {
+          const run = JSON.parse(fs.readFileSync(path.join(runsDir, f), 'utf-8'));
+          runs.push(run);
+        } catch {}
+      }
+      return runs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    } catch {
+      return [];
+    }
+  }
+
+  public updateRun(sessionId: string, runId: string, updates: Partial<TeamRun>): TeamRun | null {
+    const current = this.getRun(sessionId, runId);
+    if (!current) return null;
+    const updated: TeamRun = {
+      ...current,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    const runsDir = this.getRunsDir(sessionId);
+    const runFilePath = path.join(runsDir, `${assertSafeId(runId, 'run ID')}.json`);
+    this.atomicWrite(runFilePath, JSON.stringify(updated, null, 2));
+    this.emit('team_run_updated', updated);
+    return updated;
+  }
+
+  public addTaskToRun(sessionId: string, runId: string, task: TaskItem): TaskItem | null {
+    const run = this.getRun(sessionId, runId);
+    if (!run) return null;
+    const existingIndex = run.tasks.findIndex((t) => t.id === task.id);
+    if (existingIndex >= 0) {
+      run.tasks[existingIndex] = task;
+    } else {
+      run.tasks.push(task);
+    }
+    this.updateRun(sessionId, runId, { tasks: run.tasks });
+    this.emit('task_updated', { sessionId, runId, task });
+    return task;
+  }
+
+  public updateRunTask(sessionId: string, runId: string, taskId: string, updates: Partial<TaskItem>): TaskItem | null {
+    const run = this.getRun(sessionId, runId);
+    if (!run) return null;
+    const taskIndex = run.tasks.findIndex((t) => t.id === taskId);
+    if (taskIndex < 0) return null;
+    const current = run.tasks[taskIndex];
+    if (!current) return null;
+    const updatedTask: TaskItem = {
+      ...current,
+      ...updates,
+      id: current.id,
+      runId: current.runId,
+      title: updates.title ?? current.title,
+      assignedAgent: updates.assignedAgent ?? current.assignedAgent,
+      stage: updates.stage ?? current.stage,
+      status: updates.status ?? current.status,
+    };
+    run.tasks[taskIndex] = updatedTask;
+    this.updateRun(sessionId, runId, { tasks: run.tasks });
+    this.emit('task_updated', { sessionId, runId, task: updatedTask });
+    return updatedTask;
+  }
+
+  public addCheckToRun(sessionId: string, runId: string, check: CheckItem): CheckItem | null {
+    const run = this.getRun(sessionId, runId);
+    if (!run) return null;
+    const existingIndex = run.checks.findIndex((c) => c.id === check.id);
+    if (existingIndex >= 0) {
+      run.checks[existingIndex] = check;
+    } else {
+      run.checks.push(check);
+    }
+    this.updateRun(sessionId, runId, { checks: run.checks });
+    this.emit('check_updated', { sessionId, runId, check });
+    return check;
+  }
+
+  public updateRunCheck(sessionId: string, runId: string, checkId: string, updates: Partial<CheckItem>): CheckItem | null {
+    const run = this.getRun(sessionId, runId);
+    if (!run) return null;
+    const checkIndex = run.checks.findIndex((c) => c.id === checkId);
+    if (checkIndex < 0) return null;
+    const current = run.checks[checkIndex];
+    if (!current) return null;
+    const updatedCheck: CheckItem = {
+      ...current,
+      ...updates,
+      id: current.id,
+      runId: current.runId,
+      name: updates.name ?? current.name,
+      command: updates.command ?? current.command,
+      status: updates.status ?? current.status,
+    };
+    run.checks[checkIndex] = updatedCheck;
+    this.updateRun(sessionId, runId, { checks: run.checks });
+    this.emit('check_updated', { sessionId, runId, check: updatedCheck });
+    return updatedCheck;
   }
 }

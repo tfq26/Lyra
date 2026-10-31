@@ -1,0 +1,100 @@
+{
+  "name": "lyra-swarm",
+  "displayName": "Lyra Autonomous Cloud Swarm",
+  "description": "Always-available AWS Bedrock autonomous engineering swarm for VS Code & Coder",
+  "version": "1.0.0",
+  "publisher": "lyra-ai",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Testing",
+    "Collaboration"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:lyraSwarmSidebar",
+    "onCommand:lyra.openStudio",
+    "onCommand:lyra.dispatch",
+    "onCommand:lyra.signIn"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lyra-swarm",
+          "title": "Lyra Cloud Swarm",
+          "icon": "media/lyra-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "lyra-swarm": [
+        {
+          "type": "webview",
+          "id": "lyraSwarmSidebar",
+          "name": "Lyra Cockpit"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "lyra.openStudio",
+        "title": "Lyra: Open Swarm Studio Dashboard",
+        "category": "Lyra"
+      },
+      {
+        "command": "lyra.dispatch",
+        "title": "Lyra: Dispatch Feature to Cloud Swarm",
+        "category": "Lyra"
+      },
+      {
+        "command": "lyra.signIn",
+        "title": "Lyra: Sign In to Account",
+        "category": "Lyra"
+      },
+      {
+        "command": "lyra.signOut",
+        "title": "Lyra: Sign Out",
+        "category": "Lyra"
+      },
+      {
+        "command": "lyra.syncGit",
+        "title": "Lyra: Sync Working Snapshot to Git",
+        "category": "Lyra"
+      },
+      {
+        "command": "lyra.pullResults",
+        "title": "Lyra: Pull Verified Swarm Changes",
+        "category": "Lyra"
+      }
+    ],
+    "configuration": {
+      "title": "Lyra Swarm",
+      "properties": {
+        "lyra.hubUrl": {
+          "type": "string",
+          "default": "http://localhost:3001",
+          "description": "URL to the Lyra Hub API Gateway (local, Coder, or AWS Fargate/ALB)."
+        },
+        "lyra.autoPushGit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically commit and push working snapshots before dispatching to the cloud swarm."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "bun run build",
+    "build": "bun build ./src/extension.ts --outfile=./dist/extension.js --target=node --external=vscode",
+    "watch": "bun build ./src/extension.ts --outfile=./dist/extension.js --target=node --external=vscode --watch"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}

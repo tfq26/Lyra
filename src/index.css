@@ -1,22 +1,83 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --background: #07090e;
+  --foreground: #ededed;
+  --card: #0d1117;
+  --card-foreground: #ededed;
+  --popover: #0d1117;
+  --popover-foreground: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #07090e;
+  --secondary: #161b22;
+  --secondary-foreground: #ededed;
+  --muted: #161b22;
+  --muted-foreground: #8b949e;
+  --accent: #161b22;
+  --accent-foreground: #ededed;
+  --destructive: #f43f5e;
+  --border: #21262d;
+  --input: #21262d;
+  --ring: #58a6ff;
+  --radius: 0.5rem;
+}
+
+[data-sonner-toast] {
+  border-radius: 0.5rem !important;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4) !important;
+}
 
 @layer base {
   *, ::before, ::after {
     box-sizing: border-box;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+  }
+
+  html {
+    scroll-behavior: smooth;
   }
   
   body {
-    background-color: #09090b;
-    color: #f4f4f5;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
-    letter-spacing: -0.01em;
+    background-color: #07090e;
+    color: #ededed;
+    font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: -0.012em;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 
-  code, pre, kbd, samp, input, textarea, select, button {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+  code, pre, kbd, samp, .font-mono {
+    font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+    letter-spacing: -0.01em;
+  }
+
+  button, a, input, textarea, select {
+    transition: all 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  button:active {
+    transform: scale(0.985);
   }
 
   ::selection {
@@ -112,5 +173,28 @@
   background: rgba(255, 255, 255, 0.22) !important;
 }
 
+/* Canvas 2.0 Fluid Motion & Spring Transitions */
+.canvas-collapse-exit {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 300ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 240ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 280ms cubic-bezier(0.16, 1, 0.3, 1),
+              margin 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: grid-template-rows, opacity, transform;
+}
 
+.canvas-collapse-exit.is-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+  pointer-events: none;
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+.canvas-collapse-inner {
+  overflow: hidden;
+  min-height: 0;
+}
 

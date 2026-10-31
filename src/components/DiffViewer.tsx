@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import type { FileDiff } from '../types';
 import { ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
 
@@ -6,7 +6,7 @@ interface DiffViewerProps {
   diff: FileDiff;
 }
 
-export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
+export const DiffViewer: React.FC<DiffViewerProps> = React.memo(({ diff }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [copied, setCopied] = useState(false);
 
@@ -18,18 +18,22 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
     }
   };
 
+  const lines = useMemo(() => {
+    if (!diff.patch) return [];
+    return diff.patch.split('\n');
+  }, [diff.patch]);
+
   const renderPatchLines = () => {
     if (!diff.patch) {
       return (
-        <div className="p-3 text-neutral-500 text-xs">
+        <div className="p-3 text-neutral-500 text-xs font-mono">
           {diff.content || 'No diff content.'}
         </div>
       );
     }
 
-    const lines = diff.patch.split('\n');
     return (
-      <div className="text-xs divide-y divide-neutral-900/40">
+      <div className="text-xs divide-y divide-neutral-900/40 font-mono">
         {lines.map((line, idx) => {
           const isAdded = line.startsWith('+') && !line.startsWith('+++');
           const isRemoved = line.startsWith('-') && !line.startsWith('---');
@@ -62,8 +66,8 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
   };
 
   return (
-    <div className="my-2 rounded-md border border-neutral-800/80 bg-[#09090b] overflow-hidden text-xs">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-900/50 border-b border-neutral-800/60 select-none">
+    <div className="my-2 rounded-md border border-neutral-800/80 bg-[#0A0D14] overflow-hidden text-xs">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#10141D] border-b border-neutral-800/60 select-none">
         <button
           onClick={() => setIsOpen(!isOpen)}
           className="flex items-center gap-2 text-left text-neutral-300 hover:text-neutral-100 transition-colors"
@@ -73,11 +77,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
           ) : (
             <ChevronRight className="w-3 h-3 text-neutral-500" />
           )}
-          <span className="font-medium">{diff.filename}</span>
+          <span className="font-mono text-neutral-200 truncate">{diff.filename}</span>
         </button>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-[11px]">
+          <div className="flex items-center gap-2 text-[11px] font-mono">
             <span className="text-emerald-400">+{diff.additions}</span>
             <span className="text-rose-400">-{diff.deletions}</span>
           </div>
@@ -94,5 +98,4 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diff }) => {
       {isOpen && <div className="max-h-72 overflow-y-auto">{renderPatchLines()}</div>}
     </div>
   );
-};
-
+});

@@ -1,0 +1,20 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lyra Multi-Agent Bedrock Execution Role'
+Resources:
+  LyraBedrockRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: LyraAgentRunnerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
+Outputs:
+  RoleArn:
+    Description: 'The ARN of the Lyra Bedrock Role'
+    Value: !GetAtt LyraBedrockRole.Arn

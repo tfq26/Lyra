@@ -7,7 +7,7 @@ export interface PipelineTask {
   toAgent: AgentType;
   taskDescription: string;
   contextPayload: string;
-  status: 'draft' | 'dispatched' | 'running' | 'completed';
+  status: 'draft' | 'dispatched' | 'running' | 'completed' | 'failed' | 'cancelled';
   result?: string;
 }
 

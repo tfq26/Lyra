@@ -6,12 +6,15 @@ services:
         INSTALL_ANTIGRAVITY: ${INSTALL_ANTIGRAVITY:-false}
         INSTALL_CODEX: ${INSTALL_CODEX:-false}
         INSTALL_CLAUDE: ${INSTALL_CLAUDE:-false}
+        INSTALL_OPENCODE: ${INSTALL_OPENCODE:-false}
+        INSTALL_HERMES: ${INSTALL_HERMES:-false}
     ports:
       - "${LYRA_HUB_PORT:-3001}:3001"
     environment:
       NODE_ENV: production
       LYRA_AUTH_TOKEN: ${LYRA_AUTH_TOKEN:-}
       LYRA_ENABLE_UNRESTRICTED: ${LYRA_ENABLE_UNRESTRICTED:-false}
+      LYRA_ENABLE_TRANSCRIPT_IMPORT: ${LYRA_ENABLE_TRANSCRIPT_IMPORT:-false}
       LYRA_AGENT_TIMEOUT_MS: ${LYRA_AGENT_TIMEOUT_MS:-900000}
       SSH_CONNECTION: ${SSH_CONNECTION:-}
       SSH_TTY: ${SSH_TTY:-}
@@ -21,6 +24,8 @@ services:
       - antigravity-config:/root/.gemini
       - codex-config:/root/.codex
       - claude-config:/root/.claude
+      - opencode-config:/root/.config/opencode
+      - hermes-config:/root/.hermes
       - ${LYRA_WORKSPACE:-./workspace}:/workspace
     working_dir: /workspace
     restart: unless-stopped
@@ -30,3 +35,5 @@ volumes:
   antigravity-config:
   codex-config:
   claude-config:
+  opencode-config:
+  hermes-config:

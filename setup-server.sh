@@ -34,9 +34,13 @@ echo
 install_agy=false
 install_codex=false
 install_claude=false
+install_opencode=false
+install_hermes=false
 ask_yes_no "Install Antigravity CLI?" "yes" && install_agy=true
 ask_yes_no "Install Codex CLI?" "yes" && install_codex=true
 ask_yes_no "Install Claude Code?" "no" && install_claude=true
+ask_yes_no "Install OpenCode?" "no" && install_opencode=true
+ask_yes_no "Install Hermes Agent?" "no" && install_hermes=true
 
 workspace="${LYRA_WORKSPACE:-./workspace}"
 read -r -p "Workspace directory [$workspace]: " input_workspace || exit 1
@@ -62,10 +66,13 @@ cat > .env <<EOF
 INSTALL_ANTIGRAVITY=$install_agy
 INSTALL_CODEX=$install_codex
 INSTALL_CLAUDE=$install_claude
+INSTALL_OPENCODE=$install_opencode
+INSTALL_HERMES=$install_hermes
 LYRA_WORKSPACE=$workspace
 LYRA_HUB_PORT=$hub_port
 LYRA_AUTH_TOKEN=$auth_token
 LYRA_ENABLE_UNRESTRICTED=false
+LYRA_ENABLE_TRANSCRIPT_IMPORT=false
 EOF
 
 echo
@@ -88,6 +95,12 @@ if [[ "$install_codex" == true ]] && ask_yes_no "Sign in to Codex now?" "yes"; t
 fi
 if [[ "$install_claude" == true ]] && ask_yes_no "Sign in to Claude Code now?" "yes"; then
   login_cli "Claude Code" "claude"
+fi
+if [[ "$install_opencode" == true ]] && ask_yes_no "Set up OpenCode providers now?" "yes"; then
+  login_cli "OpenCode" "opencode auth login"
+fi
+if [[ "$install_hermes" == true ]] && ask_yes_no "Set up Hermes providers now?" "yes"; then
+  login_cli "Hermes Agent" "hermes setup"
 fi
 
 echo

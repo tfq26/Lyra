@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "lyra_harness": {
+      "command": "bun",
+      "args": [
+        "run",
+        "/Users/taufeeqali/Projects/Lyra/scripts/mcp-server-stdio.ts"
+      ],
+      "env": {
+        "LYRA_HUB_URL": "http://localhost:3001",
+        "LYRA_GATEWAY_API_KEY": "lyra-harness-default-secret"
+      }
+    }
+  }
+}
