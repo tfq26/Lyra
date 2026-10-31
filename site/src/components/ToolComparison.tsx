@@ -1,219 +1,201 @@
-import React from 'react';
-import { Check, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { 
+  Flame, 
+  Zap 
+} from 'lucide-react';
 
-interface FeatureComparison {
-  feature: string;
-  powerTool: boolean;
-  cncMachine: boolean;
-  description: string;
+interface ComparisonRow {
+  title: string;
+  category: string;
+  localTool: {
+    title: string;
+    description: string;
+    verdict: boolean;
+  };
+  lyraSwarm: {
+    title: string;
+    description: string;
+    verdict: boolean;
+  };
 }
 
 const ToolComparison: React.FC = () => {
-  const comparisonData: FeatureComparison[] = [
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+
+  const rows: ComparisonRow[] = [
     {
-      feature: "Autonomous Execution",
-      powerTool: false,
-      cncMachine: true,
-      description: "Executes tasks without continuous human intervention"
+      title: "Execution Duration & Autonomy",
+      category: "architecture",
+      localTool: {
+        title: "10s - 2min (Synchronous)",
+        description: "Requires active developer guidance. Drifts and stops if you look away.",
+        verdict: false,
+      },
+      lyraSwarm: {
+        title: "10min - 45min (Unattended)",
+        description: "Autonomous Coordinator decomposes DAG, delegates to 4 workers, and self-heals.",
+        verdict: true,
+      },
     },
     {
-      feature: "Intelligent Decision Making",
-      powerTool: false,
-      cncMachine: true,
-      description: "Makes context-aware decisions during operation"
+      title: "Local CPU, Fans & Battery Life",
+      category: "hardware",
+      localTool: {
+        title: "High Laptop Drain (4,800 RPM Fans)",
+        description: "Local model context or heavy IDE processes spin fans and drain battery.",
+        verdict: false,
+      },
+      lyraSwarm: {
+        title: "Zero Local Footprint (0% CPU)",
+        description: "100% offloaded to AWS Bedrock and cloud runners. Laptop stays silent and cold.",
+        verdict: true,
+      },
     },
     {
-      feature: "Self-Optimization",
-      powerTool: false,
-      cncMachine: true,
-      description: "Continuously improves performance based on feedback"
+      title: "Git Working Tree Cleanliness",
+      category: "git",
+      localTool: {
+        title: "Direct Working Tree Pollution",
+        description: "Edits your active files in-place, risking conflicts with your uncommitted edits.",
+        verdict: false,
+      },
+      lyraSwarm: {
+        title: "Isolated Git Worktrees",
+        description: "Workers operate in isolated background worktree branches. Clean merge on pass.",
+        verdict: true,
+      },
     },
     {
-      feature: "Multi-Agent Collaboration",
-      powerTool: false,
-      cncMachine: true,
-      description: "Multiple agents work together on complex tasks"
+      title: "Lid-Close & Cross-Device Continuation",
+      category: "hardware",
+      localTool: {
+        title: "Fragile WebSocket Session",
+        description: "Closing your laptop lid or switching Wi-Fi terminates the agent immediately.",
+        verdict: false,
+      },
+      lyraSwarm: {
+        title: "Git-Backed Indestructibility",
+        description: "Handoff state lives as Git commits. Dispatch on laptop, resume in Coder browser.",
+        verdict: true,
+      },
     },
     {
-      feature: "Real-time Adaptation",
-      powerTool: false,
-      cncMachine: true,
-      description: "Adapts to changing requirements instantly"
+      title: "Deep 30+ File Refactor Scalability",
+      category: "architecture",
+      localTool: {
+        title: "Single Context Bottleneck",
+        description: "Single context window overflows or hallucinates on large multi-file scopes.",
+        verdict: false,
+      },
+      lyraSwarm: {
+        title: "Parallel Multi-Worker Swarm",
+        description: "Lead Architect splits objective into non-overlapping subtasks running concurrently.",
+        verdict: true,
+      },
     },
     {
-      feature: "Manual Control",
-      powerTool: true,
-      cncMachine: false,
-      description: "Direct human operation and control"
+      title: "FinOps & Dollar Cost Transparency",
+      category: "cost",
+      localTool: {
+        title: "$20/mo Flat Seat + Rate Limits",
+        description: "Opaque hourly rate limits with throttles during peak usage periods.",
+        verdict: false,
+      },
+      lyraSwarm: {
+        title: "$0.02 - $0.11 / Feature (Pareto Routing)",
+        description: "Dynamically picks Qwen 480B or Nova based on task complexity. Zero idle cost.",
+        verdict: true,
+      },
     },
-    {
-      feature: "Predefined Operations",
-      powerTool: true,
-      cncMachine: false,
-      description: "Limited to specific programmed functions"
-    },
-    {
-      feature: "Single-threaded Processing",
-      powerTool: true,
-      cncMachine: false,
-      description: "One task at a time execution"
-    }
   ];
 
+  const filteredRows = selectedCategory === 'all'
+    ? rows
+    : rows.filter((r) => r.category === selectedCategory);
+
   return (
-    <div className="space-y-8 py-8">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold mb-4">Power Tool vs CNC Machine</h2>
-        <p className="text-gray-400 max-w-2xl mx-auto">
-          Understanding the fundamental paradigm shift from traditional development tools to Lyra's autonomous approach
-        </p>
+    <div className="space-y-10 py-4 max-w-6xl mx-auto">
+      
+      {/* Category Filter Pills */}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {[
+          { id: 'all', label: 'All Dimensions' },
+          { id: 'hardware', label: 'Hardware & Battery' },
+          { id: 'git', label: 'Git & Worktrees' },
+          { id: 'architecture', label: 'Multi-Agent Architecture' },
+          { id: 'cost', label: 'FinOps & Cost' },
+        ].map((cat) => (
+          <button
+            key={cat.id}
+            onClick={() => setSelectedCategory(cat.id)}
+            className={`px-4 py-2 rounded-xl text-xs font-mono transition-all ${
+              selectedCategory === cat.id
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25 border border-indigo-500/40'
+                : 'glass-panel text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            {cat.label}
+          </button>
+        ))}
       </div>
 
-      <div className="grid md:grid-cols-2 gap-8">
-        <div className="bg-gradient-to-br from-blue-900/30 to-blue-700/20 border border-blue-800/50 rounded-2xl p-6 transition-all hover:border-blue-600/50">
-          <div className="text-center mb-6">
-            <div className="w-16 h-16 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <span className="text-2xl">🔧</span>
-            </div>
-            <h3 className="text-2xl font-bold">Power Tool</h3>
-            <p className="text-blue-300 mt-2">Traditional Development Approach</p>
+      {/* Comparison Grid */}
+      <div className="glass-panel rounded-2xl shimmer-border overflow-hidden shadow-2xl">
+        <div className="grid grid-cols-1 md:grid-cols-12 bg-slate-950/90 border-b border-white/[0.08] p-4 text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
+          <div className="md:col-span-4">Evaluation Dimension</div>
+          <div className="md:col-span-4 text-rose-400 flex items-center gap-1.5">
+            <Flame className="h-4 w-4" />
+            <span>Interactive Hand Tool (Cursor / Copilot)</span>
           </div>
-          
-          <div className="space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="mt-1 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                <Check className="h-3 w-3" />
-              </div>
-              <div>
-                <h4 className="font-medium">Human-Centric</h4>
-                <p className="text-sm text-blue-200/80">Requires direct human operation and decision-making</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start gap-3">
-              <div className="mt-1 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                <Check className="h-3 w-3" />
-              </div>
-              <div>
-                <h4 className="font-medium">Immediate Control</h4>
-                <p className="text-sm text-blue-200/80">Full manual control over every operation</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start gap-3">
-              <div className="mt-1 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                <Check className="h-3 w-3" />
-              </div>
-              <div>
-                <h4 className="font-medium">Predictable Output</h4>
-                <p className="text-sm text-blue-200/80">Results directly correlate to human input</p>
-              </div>
-            </div>
+          <div className="md:col-span-4 text-indigo-400 flex items-center gap-1.5">
+            <Zap className="h-4 w-4" />
+            <span>Lyra Autonomous Swarm (AWS Bedrock)</span>
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-purple-900/30 to-purple-700/20 border border-purple-800/50 rounded-2xl p-6 transition-all hover:border-purple-600/50">
-          <div className="text-center mb-6">
-            <div className="w-16 h-16 bg-purple-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <span className="text-2xl">🤖</span>
+        <div className="divide-y divide-white/[0.06]">
+          {filteredRows.map((row, idx) => (
+            <div key={idx} className="grid grid-cols-1 md:grid-cols-12 p-5 gap-4 hover:bg-white/[0.02] transition-colors items-center">
+              
+              {/* Dimension Title */}
+              <div className="md:col-span-4">
+                <h4 className="text-sm font-bold text-white mb-1">{row.title}</h4>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
+                  {row.category}
+                </span>
+              </div>
+
+              {/* Local Hand Tool Column */}
+              <div className="md:col-span-4 p-3 rounded-xl bg-rose-950/20 border border-rose-500/20 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center text-xs font-bold">
+                    ✕
+                  </span>
+                  <span className="text-xs font-semibold text-rose-200">{row.localTool.title}</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed pl-6">
+                  {row.localTool.description}
+                </p>
+              </div>
+
+              {/* Lyra Cloud Swarm Column */}
+              <div className="md:col-span-4 p-3 rounded-xl bg-indigo-950/25 border border-indigo-500/30 space-y-1 shadow-md shadow-indigo-500/5">
+                <div className="flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold">
+                    ✓
+                  </span>
+                  <span className="text-xs font-semibold text-indigo-200">{row.lyraSwarm.title}</span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed pl-6">
+                  {row.lyraSwarm.description}
+                </p>
+              </div>
+
             </div>
-            <h3 className="text-2xl font-bold">CNC Machine</h3>
-            <p className="text-purple-300 mt-2">Lyra's Autonomous Approach</p>
-          </div>
-          
-          <div className="space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="mt-1 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
-                <Check className="h-3 w-3" />
-              </div>
-              <div>
-                <h4 className="font-medium">Autonomous Operation</h4>
-                <p className="text-sm text-purple-200/80">Operates independently with high-level guidance</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start gap-3">
-              <div className="mt-1 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
-                <Check className="h-3 w-3" />
-              </div>
-              <div>
-                <h4 className="font-medium">Intelligent Planning</h4>
-                <p className="text-sm text-purple-200/80">Creates and executes complex plans automatically</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start gap-3">
-              <div className="mt-1 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center flex-shrink-0">
-                <Check className="h-3 w-3" />
-              </div>
-              <div>
-                <h4 className="font-medium">Adaptive Execution</h4>
-                <p className="text-sm text-purple-200/80">Adjusts approach based on real-time feedback</p>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
       </div>
 
-      <div className="bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-800/50">
-            <tr>
-              <th className="text-left p-4 font-medium">Feature</th>
-              <th className="text-center p-4 font-medium">Power Tool</th>
-              <th className="text-center p-4 font-medium">CNC Machine</th>
-            </tr>
-          </thead>
-          <tbody>
-            {comparisonData.map((item, index) => (
-              <tr 
-                key={index} 
-                className="border-t border-gray-800 hover:bg-gray-800/20 transition-colors"
-              >
-                <td className="p-4">
-                  <div className="font-medium">{item.feature}</div>
-                  <div className="text-sm text-gray-400 mt-1">{item.description}</div>
-                </td>
-                <td className="p-4 text-center">
-                  {item.powerTool ? (
-                    <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-green-500/20 text-green-400 mx-auto">
-                      <Check className="h-4 w-4" />
-                    </div>
-                  ) : (
-                    <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-500/20 text-red-400 mx-auto">
-                      <X className="h-4 w-4" />
-                    </div>
-                  )}
-                </td>
-                <td className="p-4 text-center">
-                  {item.cncMachine ? (
-                    <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-green-500/20 text-green-400 mx-auto">
-                      <Check className="h-4 w-4" />
-                    </div>
-                  ) : (
-                    <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-500/20 text-red-400 mx-auto">
-                      <X className="h-4 w-4" />
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 border border-indigo-500/20 rounded-2xl p-6">
-        <h3 className="text-xl font-bold mb-3">Why This Matters</h3>
-        <p className="text-gray-300 mb-4">
-          The shift from Power Tools to CNC Machines represents a fundamental change in how we approach software development. 
-          Instead of manually executing each step, developers become planners and supervisors, delegating the detailed execution 
-          to intelligent systems that can work faster, more consistently, and with fewer errors than humans.
-        </p>
-        <p className="text-gray-300">
-          Lyra embodies this CNC approach, allowing developers to focus on high-level architecture and creative problem-solving 
-          while autonomous agents handle the implementation details, testing, and optimization.
-        </p>
-      </div>
     </div>
   );
 };

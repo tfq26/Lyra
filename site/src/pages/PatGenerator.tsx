@@ -1,219 +1,197 @@
 import React, { useState } from 'react';
-import { Copy, Check, Eye, EyeOff, Key } from 'lucide-react';
+import { 
+  Key, 
+  Copy, 
+  Check, 
+  Eye, 
+  EyeOff, 
+  ShieldCheck, 
+  Clock, 
+  Sparkles 
+} from 'lucide-react';
 
 const PatGenerator: React.FC = () => {
+  const [tokenName, setTokenName] = useState('My Laptop VS Code');
   const [token, setToken] = useState('');
   const [copied, setCopied] = useState(false);
-  const [showToken, setShowToken] = useState(false);
-  const [permissions, setPermissions] = useState({
-    read: true,
-    write: true,
+  const [showToken, setShowToken] = useState(true);
+  const [scopes, setScopes] = useState({
+    dispatch: true,
+    worktree: true,
+    telemetry: true,
     admin: false,
-    swarmControl: true
   });
-  const [expiration, setExpiration] = useState('30d');
+  const [expiry, setExpiry] = useState('30');
 
   const generateToken = () => {
-    // In a real implementation, this would call an API
-    // For demo purposes, we'll generate a fake token
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < 40; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    const chars = '0123456789abcdef';
+    let hex = '';
+    for (let i = 0; i < 48; i++) {
+      hex += chars[Math.floor(Math.random() * chars.length)];
     }
-    setToken(`lyra_pat_${result}`);
+    const generated = `lyra-pat-${hex}`;
+    setToken(generated);
     setCopied(false);
+    setShowToken(true);
   };
 
   const copyToClipboard = () => {
-    if (token) {
-      navigator.clipboard.writeText(token);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    if (!token) return;
+    navigator.clipboard.writeText(token);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold mb-4">Personal Access Token Generator</h1>
-        <p className="text-gray-400">
-          Generate secure tokens for authenticating with the Lyra API
+    <div className="max-w-4xl mx-auto space-y-8 py-4">
+      
+      {/* Header */}
+      <div className="text-center space-y-3">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-xs font-mono text-purple-300">
+          <Key className="h-3.5 w-3.5 text-purple-400" />
+          <span>Personal Access Token (PAT) Portal</span>
+        </div>
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+          API & Swarm Authentication
+        </h1>
+        <p className="text-sm text-slate-400 max-w-xl mx-auto">
+          Generate secure tokens to authenticate your VS Code extension, Coder cloud workspaces, or CI/CD pipelines against the Lyra Cloud Swarm.
         </p>
       </div>
 
-      <div className="bg-gray-800/30 border border-gray-700 rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 bg-indigo-500/20 rounded-lg flex items-center justify-center">
-            <Key className="h-5 w-5 text-indigo-400" />
-          </div>
-          <div>
-            <h2 className="font-semibold">Create New Token</h2>
-            <p className="text-sm text-gray-400">Configure permissions and expiration</p>
-          </div>
+      {/* Main Generator Card */}
+      <div className="glass-panel rounded-2xl shimmer-border p-6 sm:p-8 space-y-6 shadow-2xl">
+        
+        {/* Token Label Input */}
+        <div className="space-y-2">
+          <label className="text-xs font-mono uppercase text-slate-300 font-semibold block">
+            Token Description / Client Label
+          </label>
+          <input
+            type="text"
+            value={tokenName}
+            onChange={(e) => setTokenName(e.target.value)}
+            placeholder="e.g., MacBook Pro VS Code, Coder Server, GitHub Actions"
+            className="w-full px-4 py-2.5 rounded-xl bg-slate-900/90 border border-white/[0.1] text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500/60 font-mono"
+          />
         </div>
 
-        <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium mb-2">Token Permissions</label>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <label className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={permissions.read}
-                  disabled
-                  className="rounded text-indigo-500 focus:ring-indigo-500"
-                />
-                <div>
-                  <div className="font-medium">Read Access</div>
-                  <div className="text-xs text-gray-400">View projects and data</div>
-                </div>
-              </label>
-              
-              <label className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={permissions.write}
-                  onChange={(e) => setPermissions({...permissions, write: e.target.checked})}
-                  className="rounded text-indigo-500 focus:ring-indigo-500"
-                />
-                <div>
-                  <div className="font-medium">Write Access</div>
-                  <div className="text-xs text-gray-400">Modify projects and data</div>
-                </div>
-              </label>
-              
-              <label className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={permissions.admin}
-                  onChange={(e) => setPermissions({...permissions, admin: e.target.checked})}
-                  className="rounded text-indigo-500 focus:ring-indigo-500"
-                />
-                <div>
-                  <div className="font-medium">Admin Access</div>
-                  <div className="text-xs text-gray-400">Manage settings and users</div>
-                </div>
-              </label>
-              
-              <label className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={permissions.swarmControl}
-                  onChange={(e) => setPermissions({...permissions, swarmControl: e.target.checked})}
-                  className="rounded text-indigo-500 focus:ring-indigo-500"
-                />
-                <div>
-                  <div className="font-medium">Swarm Control</div>
-                  <div className="text-xs text-gray-400">Control autonomous agents</div>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Expiration</label>
-            <div className="flex flex-wrap gap-3">
-              {['7d', '30d', '90d', '1y'].map((option) => (
-                <label 
-                  key={option}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg border cursor-pointer ${
-                    expiration === option 
-                      ? 'border-indigo-500 bg-indigo-500/10' 
-                      : 'border-gray-700 hover:border-gray-600'
+        {/* Expiration & Scopes */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+          
+          <div className="space-y-3">
+            <label className="text-xs font-mono uppercase text-slate-300 font-semibold flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-indigo-400" />
+              <span>Token Validity & Expiration</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { val: '7', label: '7 Days' },
+                { val: '30', label: '30 Days' },
+                { val: '90', label: '90 Days' },
+              ].map((exp) => (
+                <button
+                  key={exp.val}
+                  type="button"
+                  onClick={() => setExpiry(exp.val)}
+                  className={`py-2 px-3 rounded-xl text-xs font-mono transition-all ${
+                    expiry === exp.val
+                      ? 'bg-indigo-600 text-white border border-indigo-500/50 shadow-md'
+                      : 'bg-slate-900/60 text-slate-400 border border-white/[0.06] hover:text-white'
                   }`}
                 >
-                  <input
-                    type="radio"
-                    name="expiration"
-                    value={option}
-                    checked={expiration === option}
-                    onChange={(e) => setExpiration(e.target.value)}
-                    className="text-indigo-500 focus:ring-indigo-500"
-                  />
-                  <span>{option === '1y' ? '1 Year' : option === '7d' ? '7 Days' : option === '30d' ? '30 Days' : '90 Days'}</span>
-                </label>
+                  {exp.label}
+                </button>
               ))}
             </div>
           </div>
 
+          <div className="space-y-3">
+            <label className="text-xs font-mono uppercase text-slate-300 font-semibold flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5 text-indigo-400" />
+              <span>Permission Scopes</span>
+            </label>
+            <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+              {[
+                { key: 'dispatch', label: 'swarm:dispatch', desc: 'Trigger tasks' },
+                { key: 'worktree', label: 'worktree:merge', desc: 'Auto-merges' },
+                { key: 'telemetry', label: 'finops:metrics', desc: 'Token logs' },
+                { key: 'admin', label: 'gateway:admin', desc: 'Cluster control' },
+              ].map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => setScopes({ ...scopes, [s.key]: !scopes[s.key as keyof typeof scopes] })}
+                  className={`p-2.5 rounded-xl border text-left transition-all ${
+                    scopes[s.key as keyof typeof scopes]
+                      ? 'bg-indigo-950/40 border-indigo-500/40 text-indigo-200'
+                      : 'bg-slate-900/40 border-white/[0.06] text-slate-500'
+                  }`}
+                >
+                  <div className="font-semibold">{s.label}</div>
+                  <div className="text-[10px] text-slate-400">{s.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+        </div>
+
+        {/* Generate Button */}
+        <div className="pt-4">
           <button
             onClick={generateToken}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 py-3 rounded-lg font-medium transition-colors"
+            className="w-full py-3.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-500 via-purple-600 to-indigo-600 text-white shadow-xl shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2"
           >
-            Generate Token
+            <Sparkles className="h-4 w-4" />
+            <span>Generate New Personal Access Token</span>
           </button>
         </div>
-      </div>
 
-      {token && (
-        <div className="bg-gray-800/30 border border-gray-700 rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center">
-              <Check className="h-5 w-5 text-green-400" />
-            </div>
-            <div>
-              <h2 className="font-semibold">Your Personal Access Token</h2>
-              <p className="text-sm text-gray-400">Copy this token now - you won't see it again!</p>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <div className="flex-1 relative">
-              <input
-                type={showToken ? "text" : "password"}
-                value={token}
-                readOnly
-                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 pr-12 font-mono text-sm"
-              />
+        {/* Generated Token Result Display */}
+        {token && (
+          <div className="pt-4 border-t border-white/[0.08] space-y-4 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono uppercase text-emerald-400 font-semibold flex items-center gap-1.5">
+                <Check className="h-4 w-4" />
+                <span>Token Ready — Copy Immediately</span>
+              </span>
               <button
                 onClick={() => setShowToken(!showToken)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                className="text-xs font-mono text-slate-400 hover:text-white flex items-center gap-1"
               >
-                {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                <span>{showToken ? 'Hide' : 'Reveal'}</span>
               </button>
             </div>
-            <button
-              onClick={copyToClipboard}
-              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 px-4 py-3 rounded-lg transition-colors whitespace-nowrap"
-            >
-              {copied ? (
-                <>
-                  <Check className="h-4 w-4" /> Copied!
-                </>
-              ) : (
-                <>
-                  <Copy className="h-4 w-4" /> Copy
-                </>
-              )}
-            </button>
-          </div>
 
-          <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-            <h3 className="font-medium text-yellow-500 flex items-center gap-2">
-              <span className="w-2 h-2 bg-yellow-500 rounded-full"></span>
-              Security Notice
-            </h3>
-            <p className="text-sm text-yellow-200/90 mt-2">
-              Treat this token like a password. Store it securely and never share it in public repositories or communications.
-            </p>
-          </div>
-        </div>
-      )}
+            <div className="p-4 rounded-xl bg-[#06080E] border border-indigo-500/40 flex items-center justify-between gap-4 shadow-lg shadow-indigo-500/10 font-mono text-xs sm:text-sm">
+              <div className="overflow-x-auto text-indigo-300 font-semibold select-all">
+                {showToken ? token : '•'.repeat(token.length)}
+              </div>
+              <button
+                onClick={copyToClipboard}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shrink-0"
+              >
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-300" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{copied ? 'Copied!' : 'Copy'}</span>
+              </button>
+            </div>
 
-      <div className="bg-gray-800/30 border border-gray-700 rounded-2xl p-6">
-        <h3 className="font-semibold mb-3">Using Your Token</h3>
-        <p className="text-gray-400 mb-4">
-          Include your token in the Authorization header when making API requests:
-        </p>
-        <pre className="bg-gray-900 rounded-lg p-4 text-sm overflow-x-auto">
-          {`curl -H "Authorization: Bearer ${token || 'YOUR_TOKEN_HERE'}" \\
-  https://api.lyra.dev/v1/projects`}
-        </pre>
-        <p className="text-gray-400 mt-4 text-sm">
-          For more information on API usage, visit our <a href="#" className="text-indigo-400 hover:underline">API documentation</a>.
-        </p>
+            {/* Usage Instructions */}
+            <div className="p-4 rounded-xl bg-slate-900/80 border border-white/[0.06] space-y-2 text-xs font-mono text-slate-300">
+              <div className="text-slate-400 font-semibold uppercase text-[10px]">How to use in VS Code or Coder:</div>
+              <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                <li>Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">Cmd+Shift+P</kbd> in VS Code.</li>
+                <li>Type <span className="text-indigo-400">"Lyra: Sign In"</span> and press Enter.</li>
+                <li>Paste this token when prompted. Your IDE is now permanently connected.</li>
+              </ol>
+            </div>
+          </div>
+        )}
+
       </div>
+
     </div>
   );
 };
