@@ -3,6 +3,10 @@ node_modules
 
 # output
 out
+# VS Code extensions
+*.vsix
+.vscode-test/
+
 dist
 *.tgz
 
