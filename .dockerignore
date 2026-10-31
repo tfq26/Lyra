@@ -1,6 +1,11 @@
-node_modules
-dist
-.git
-.DS_Store
+**/node_modules
+**/dist
+**/.git
+**/.DS_Store
 src-tauri/target
 *.log
+*.vsix
+.lyra
+.vscode-test
+site/node_modules
+site/dist

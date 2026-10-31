@@ -316,7 +316,7 @@ Resources:
       VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
       PubliclyAccessible: false
       MultiAZ: false
-      BackupRetentionPeriod: 7
+      BackupRetentionPeriod: 1
 
   ExecutionRole:
     Type: AWS::IAM::Role

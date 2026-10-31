@@ -86,6 +86,14 @@ echo "✅ Bedrock Role Active: $BEDROCK_ROLE_ARN"
 # 5. Deploy CloudFormation Fargate Runner Stack
 echo ""
 echo "🚀 Step 5: Deploying CloudFormation Stack ($STACK_NAME)..."
+CURRENT_STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "")
+if [ "$CURRENT_STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+  echo "⚠️ Stack $STACK_NAME is in ROLLBACK_COMPLETE state. Cleaning up rolled-back stack before re-deploying..."
+  aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$REGION"
+  aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$REGION"
+  echo "✅ Rolled back stack cleaned up."
+fi
+
 aws cloudformation deploy \
   --template-file infra/aws/template.yaml \
   --stack-name "$STACK_NAME" \
