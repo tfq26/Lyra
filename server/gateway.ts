@@ -327,6 +327,35 @@ export class LyraHarnessGateway {
   }
 
   /**
+   * Cancel an active or stuck run, freeing the workspace lock.
+   */
+  public cancelRun(runId: string): { success: boolean; message: string } {
+    let targetSessionId: string | undefined;
+    for (const session of this.store.listSessions()) {
+      const runs = this.store.listRuns(session.id);
+      if (runs.some((r) => r.id === runId)) {
+        targetSessionId = session.id;
+        break;
+      }
+    }
+
+    if (this.coordinator) {
+      this.coordinator.cancelRun(runId, targetSessionId);
+    }
+
+    if (targetSessionId) {
+      this.store.updateRun(targetSessionId, runId, {
+        state: 'cancelled',
+        stage: 'cancelled',
+        error: 'Cancelled via Gateway API',
+      });
+      return { success: true, message: `Run ${runId} cancelled successfully.` };
+    }
+
+    return { success: false, message: `Run ${runId} not found.` };
+  }
+
+  /**
    * Remote Agent calls this when it needs excerpts from local files that only the local harness can read.
    */
   public requestFileContext(params: {

@@ -243,6 +243,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 4b. Run Cancel
+    const cancelMatch = url.pathname.match(/^\/api\/gateway\/runs\/([^/]+)\/cancel$/);
+    if (cancelMatch && req.method === 'POST') {
+      const runId = cancelMatch[1]!;
+      const result = harnessGateway.cancelRun(runId);
+      res.writeHead(result.success ? 200 : 404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+      return;
+    }
+
     // 5. Pending Context/Permission Requests
     const pendingMatch = url.pathname.match(/^\/api\/gateway\/runs\/([^/]+)\/pending$/);
     if (pendingMatch && req.method === 'GET') {

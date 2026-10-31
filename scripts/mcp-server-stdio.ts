@@ -6,6 +6,11 @@
  * OpenAI Codex, Claude Desktop, Cursor, and other MCP clients.
  */
 
+// Route all logging to stderr so it never corrupts MCP JSON-RPC protocol on stdout
+console.log = (...args: any[]) => process.stderr.write(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n');
+console.info = console.log;
+console.warn = console.log;
+
 import readline from 'node:readline';
 import path from 'node:path';
 import { UnifiedStore } from '../server/unifiedStore';
