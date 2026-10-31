@@ -71,7 +71,7 @@ export function parseSwarmPlan(text: string, runId: string, workers: WorkerSlot[
 
   const criteria = rawCriteria.map((item) => String(item).trim()).filter(Boolean).slice(0, 24);
   if (criteria.length === 0) throw new Error('Planner output must include at least one acceptance criterion.');
-  if (rawTasks.length === 0 || rawTasks.length > 12) throw new Error('Planner output must include between 1 and 12 tasks (anti-sprawl limit).');
+  if (rawTasks.length === 0 || rawTasks.length > 24) throw new Error('Planner output must include between 1 and 24 tasks (anti-sprawl limit).');
 
   const taskIds = rawTasks.map((_, index) => `task-${runId}-${index + 1}`);
   const titles = new Map<string, string>();
