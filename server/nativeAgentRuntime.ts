@@ -74,6 +74,7 @@ export class NativeAgentRuntime extends EventEmitter {
         onToolEvent: async (toolCall) => {
         const safeInput = { ...(toolCall.input as Record<string, unknown> || {}) };
         if ('content' in safeInput) safeInput.content = '[file content omitted]';
+        if ('files' in safeInput) safeInput.files = '[batch files omitted]';
         if ('patch' in safeInput) safeInput.patch = '[patch content omitted]';
         if (toolCall.name === 'run_command') safeInput.command = '[command requires approval]';
         const safeToolCall = { id: `${input.runId}:${toolCall.name}:${Date.now()}`, name: toolCall.name, args: safeInput, status: toolCall.status === 'failed' ? 'error' : toolCall.status === 'completed' ? 'completed' : 'running', timestamp: new Date().toISOString() };
@@ -87,7 +88,7 @@ export class NativeAgentRuntime extends EventEmitter {
       },
       });
       const approval = new HumanInTheLoop({
-      allowedTools: ['list_files', 'read_file', 'search_files', 'write_file', 'apply_patch', 'git_status', 'git_diff'],
+      allowedTools: ['list_files', 'read_file', 'search_files', 'write_file', 'write_files', 'apply_patch', 'git_status', 'git_diff'],
       ask: async (prompt) => this.waitForApproval(input, prompt),
       });
       const agent = await getNativeAgent(profile, input.sessionId, this.store.getStoragePath(), input.tenantId || 'local', tools, [approval]);
@@ -187,6 +188,7 @@ export class NativeAgentRuntime extends EventEmitter {
         onToolEvent: async (toolCall) => {
           const safeInput = { ...(toolCall.input as Record<string, unknown> || {}) };
           if ('content' in safeInput) safeInput.content = '[file content omitted]';
+          if ('files' in safeInput) safeInput.files = '[batch files omitted]';
           if ('patch' in safeInput) safeInput.patch = '[patch content omitted]';
           const safeToolCall = {
             id: `${input.runId}:${input.taskId}:${toolCall.name}:${Date.now()}`,

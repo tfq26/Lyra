@@ -185,6 +185,7 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
   const wrap = (name: string, callback: (input: any) => unknown): ((input: unknown) => Promise<string>) => async (input: unknown) => {
     const safeInput = { ...(input as Record<string, unknown> || {}) };
     if ('content' in safeInput) safeInput.content = '[file content omitted]';
+    if ('files' in safeInput) safeInput.files = '[batch files content omitted]';
     if ('patch' in safeInput) safeInput.patch = '[patch content omitted]';
     if (name === 'run_command') safeInput.command = '[command requires approval]';
     await hooks.onToolEvent?.({ name, input: safeInput, status: 'running' });
@@ -242,6 +243,43 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     return `Wrote ${path.relative(root, file)} (${content.length} characters).`;
   }) });
 
+  const writeFiles = tool({
+    name: 'write_files',
+    description: 'Create or replace multiple project files in a single fast turn. Strongly preferred when creating new components, tests, and styles simultaneously.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Relative path to project file' },
+              content: { type: 'string', description: 'Complete file content to write' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      required: ['files'],
+      additionalProperties: false,
+    },
+    callback: wrap('write_files', ({ files }: { files: Array<{ path: string; content: string }> }) => {
+      if (!Array.isArray(files) || files.length === 0) {
+        throw new Error('files array must contain at least one file entry.');
+      }
+      const results: string[] = [];
+      for (const f of files) {
+        if (f.content.length > 500_000) throw new Error(`File ${f.path} exceeds 500 KB.`);
+        const file = resolveWorkspacePath(root, f.path, true);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, f.content, 'utf8');
+        results.push(`Wrote ${path.relative(root, file)} (${f.content.length} characters)`);
+      }
+      return `Batch wrote ${results.length} files:\n${results.join('\n')}`;
+    }),
+  });
+
   const applyPatch = tool({ name: 'apply_patch', description: 'Apply a unified diff patch to files inside the assigned project workspace.', inputSchema: { type: 'object', properties: { patch: { type: 'string' } }, required: ['patch'], additionalProperties: false }, callback: wrap('apply_patch', ({ patch }: { patch: string }) => {
     if (patch.length > 500_000) throw new Error('Patch exceeds 500 KB.');
     const paths = [...patch.matchAll(/^\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1] || '');
@@ -261,7 +299,7 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
   }) });
   const runCommand = tool({ name: 'run_command', description: 'Run a shell command in the project workspace. Lyra requests user approval before execution.', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false }, callback: wrap('run_command', async ({ command }: { command: string }) => await runProcess(command, root, 180_000, hooks.signal)) });
 
-  return [listFiles, readFile, searchFiles, writeFile, applyPatch, gitStatus, gitDiff, runCheck, runCommand];
+  return [listFiles, readFile, searchFiles, writeFile, writeFiles, applyPatch, gitStatus, gitDiff, runCheck, runCommand];
 }
 
 export function requiresApproval(toolName: string, input: unknown) {
