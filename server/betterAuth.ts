@@ -15,11 +15,10 @@ let sesClient: SESv2Client | null = null;
 
 async function sendAuthEmail(to: string, subject: string, url: string) {
   const from = process.env.LYRA_SES_FROM_EMAIL;
-  if (process.env.LYRA_HOSTED !== 'true') {
+  if (process.env.LYRA_HOSTED !== 'true' || !from) {
     console.info(`[Lyra Auth] ${subject} for ${to}: ${url}`);
     return;
   }
-  if (!from) throw new Error('Hosted account verification requires LYRA_SES_FROM_EMAIL.');
   sesClient ||= new SESv2Client({ region: process.env.LYRA_SES_REGION || process.env.AWS_REGION || 'us-east-1' });
   await sesClient.send(new SendEmailCommand({
     FromEmailAddress: from,
@@ -32,7 +31,9 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
   if (!process.env.LYRA_DATABASE_HOST) return null;
   const secret = process.env.BETTER_AUTH_SECRET;
   if (!secret) throw new Error('BETTER_AUTH_SECRET must be configured in AWS Secrets Manager before enabling login.');
-  if (process.env.LYRA_HOSTED === 'true' && !process.env.LYRA_SES_FROM_EMAIL) throw new Error('LYRA_SES_FROM_EMAIL must be configured for hosted verification and password-reset emails.');
+  if (process.env.LYRA_HOSTED === 'true' && !process.env.LYRA_SES_FROM_EMAIL) {
+    console.warn('[Lyra Auth] LYRA_SES_FROM_EMAIL is not set. Verification links will be logged to stdout/CloudWatch instead of sent via SES.');
+  }
 
   pool = new Pool({
     host: process.env.LYRA_DATABASE_HOST,
@@ -45,7 +46,13 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
     idleTimeoutMillis: 30_000,
   });
   await pool.query('CREATE SCHEMA IF NOT EXISTS auth');
-  const baseURL = process.env.BETTER_AUTH_URL || `http://localhost:${process.env.LYRA_HUB_PORT || '3001'}`;
+  let baseURL = process.env.BETTER_AUTH_URL || `http://localhost:${process.env.LYRA_HUB_PORT || '3001'}`;
+  try {
+    const parsed = new URL(baseURL);
+    if (!parsed.hostname) throw new Error('Empty hostname');
+  } catch {
+    baseURL = `http://localhost:${process.env.LYRA_HUB_PORT || '3001'}`;
+  }
   const auth = betterAuth({
     appName: 'Lyra',
     baseURL,
@@ -54,7 +61,7 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
     trustedOrigins: [baseURL, 'http://localhost:5173', 'http://127.0.0.1:5173', 'tauri://localhost'],
     emailAndPassword: {
       enabled: true,
-      requireEmailVerification: process.env.LYRA_HOSTED === 'true',
+      requireEmailVerification: process.env.LYRA_HOSTED === 'true' && Boolean(process.env.LYRA_SES_FROM_EMAIL),
       disableSignUp: process.env.LYRA_AUTH_DISABLE_SIGNUP === 'true',
       minPasswordLength: 12,
       maxPasswordLength: 128,

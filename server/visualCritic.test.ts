@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, mock } from 'bun:test';
 import { VisualCritic } from './visualCritic';
 import { VerificationRunner } from './verificationRunner';
 import type { ScreenshotResult } from './visualCapture';
@@ -15,7 +15,7 @@ describe('VisualCritic & Verification Loop', () => {
     expect(result.passed).toBe(false);
     expect(result.score).toBeLessThan(50);
     expect(result.defects.length).toBeGreaterThan(0);
-    expect(result.defects[0].severity).toBe('critical');
+    expect(result.defects[0]?.severity).toBe('critical');
     expect(result.repairGuidance).toContain('CRITICAL RUNTIME ERROR');
   });
 
@@ -73,7 +73,7 @@ describe('VisualCritic & Verification Loop', () => {
     };
 
     const fakeBedrockClient = {
-      send: vi.fn().mockResolvedValue({
+      send: mock(() => Promise.resolve({
         body: new TextEncoder().encode(
           JSON.stringify({
             content: [
@@ -84,7 +84,7 @@ describe('VisualCritic & Verification Loop', () => {
             ],
           })
         ),
-      }),
+      })),
     };
 
     const fakeBase64 = Buffer.alloc(20_000, 'x').toString('base64');

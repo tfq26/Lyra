@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install || npm install --include=dev --legacy-peer-deps --no-audit --no-fund
+ARG CACHEBUST=1
 COPY . .
 RUN bun run build
 
