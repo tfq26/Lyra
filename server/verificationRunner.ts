@@ -4,6 +4,14 @@ import os from 'os';
 import path from 'path';
 import type { CheckItem } from './types';
 import { MigrationCanary } from './migrationCanary';
+import { VisualCapture } from './visualCapture';
+import { VisualCritic } from './visualCritic';
+
+export interface VerificationContext {
+  previewUrl?: string;
+  objective?: string;
+  runId?: string;
+}
 
 export class VerificationRunner {
   private getExtendedEnv(): NodeJS.ProcessEnv {
@@ -31,6 +39,20 @@ export class VerificationRunner {
         runId: '',
         name: 'Database Migration Canary',
         command: 'lyra canary database-migrations',
+        status: 'pending',
+      });
+    }
+
+    // Check for frontend visual critique
+    const isFrontendFile = (file: string) => /\.(tsx|jsx|html|css|vue|svelte)$/i.test(file);
+    const touchesFrontend = Boolean(changedFiles && changedFiles.some((f) => isFrontendFile(typeof f === 'string' ? f : f.filename)));
+
+    if (touchesFrontend) {
+      checks.push({
+        id: `check-visual-critique-${Date.now()}`,
+        runId: '',
+        name: 'Visual Design & Layout Critique',
+        command: 'lyra visual-critique',
         status: 'pending',
       });
     }
@@ -126,7 +148,82 @@ export class VerificationRunner {
     return checks;
   }
 
-  public runCheck(check: CheckItem, cwd: string, timeoutMs = 60000): Promise<CheckItem> {
+  private async runVisualCritiqueCheck(
+    check: CheckItem,
+    _cwd: string,
+    context?: VerificationContext
+  ): Promise<CheckItem> {
+    const runId = context?.runId || check.runId || `critique-${Date.now()}`;
+    const capture = new VisualCapture();
+    const critic = new VisualCritic();
+
+    let previewUrl = context?.previewUrl;
+    if (!previewUrl) {
+      for (const port of [5174, 5173, 3000, 8080]) {
+        try {
+          const res = await fetch(`http://localhost:${port}`);
+          if (res.ok || res.status === 200 || res.status === 404) {
+            previewUrl = `http://localhost:${port}`;
+            break;
+          }
+        } catch {
+          // Port not listening
+        }
+      }
+    }
+
+    if (!previewUrl) {
+      return {
+        ...check,
+        status: 'unverified',
+        output: 'Visual critique check skipped: No active preview server detected.',
+        evidence: 'No active web dev preview server found on ports 5174, 5173, 3000, or 8080.',
+      };
+    }
+
+    const captureReport = await capture.capturePreview(previewUrl, runId);
+    if (!captureReport.success && captureReport.screenshots.length === 0) {
+      return {
+        ...check,
+        status: 'failed',
+        exitCode: 1,
+        output: `Failed to capture preview screenshot: ${captureReport.error || 'Unknown error'}`,
+        evidence: `Preview URL: ${previewUrl}\nError: ${captureReport.error || 'Screenshot capture failed'}`,
+      };
+    }
+
+    const critique = await critic.evaluate(captureReport.screenshots, {
+      url: previewUrl,
+      objective: context?.objective || 'Frontend web application UI',
+      consoleErrors: captureReport.consoleErrors,
+      pageErrors: captureReport.pageErrors,
+    });
+
+    const defectLines = critique.defects
+      .map((d) => `[${d.severity.toUpperCase()}] (${d.category}) ${d.description}\n  Suggested Fix: ${d.suggestedFix}`)
+      .join('\n');
+
+    const evidence = `Visual QA Score: ${critique.score}/100\nPassed: ${critique.passed}\nPreview URL: ${previewUrl}\nSummary: ${critique.summary}\n\nDefects (${critique.defects.length}):\n${defectLines || 'None'}\n\nRepair Guidance:\n${critique.repairGuidance}`;
+
+    return {
+      ...check,
+      status: critique.passed ? 'passed' : 'failed',
+      exitCode: critique.passed ? 0 : 1,
+      output: critique.summary,
+      evidence,
+    };
+  }
+
+  public runCheck(
+    check: CheckItem,
+    cwd: string,
+    timeoutMs = 60000,
+    context?: VerificationContext
+  ): Promise<CheckItem> {
+    if (check.command === 'lyra visual-critique') {
+      return this.runVisualCritiqueCheck(check, cwd, context);
+    }
+
     if (check.command === 'lyra canary database-migrations' || check.command === 'migration-canary inspect') {
       const canary = new MigrationCanary();
       const canaryResult = canary.runCanaryCheck(cwd);
@@ -195,7 +292,8 @@ export class VerificationRunner {
   public async runAllChecks(
     checks: CheckItem[],
     cwd: string,
-    onProgress?: (updatedCheck: CheckItem) => void
+    onProgress?: (updatedCheck: CheckItem) => void,
+    context?: VerificationContext
   ): Promise<{ allPassed: boolean; results: CheckItem[] }> {
     const results: CheckItem[] = [];
     if (checks.length === 0) return { allPassed: false, results };
@@ -212,7 +310,7 @@ export class VerificationRunner {
       if (onProgress) {
         onProgress({ ...check, status: 'running' });
       }
-      const res = await this.runCheck(check, cwd);
+      const res = await this.runCheck(check, cwd, 60000, context);
       results.push(res);
       if (onProgress) {
         onProgress(res);

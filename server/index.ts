@@ -65,7 +65,7 @@ const eventJournal = process.env.LYRA_DATABASE_HOST
     })
   : undefined;
 const nativeAgentRuntime = new NativeAgentRuntime(store, () => eventJournal?.waitForWrites() || Promise.resolve());
-const teamCoordinator = new TeamCoordinator(store, processManager, nativeAgentRuntime);
+const teamCoordinator = new TeamCoordinator(store, processManager, nativeAgentRuntime, previewManager);
 const modelCompatibility = new ModelCompatibilityService(store);
 const ecsNativeDispatcher = new EcsNativeDispatcher();
 const runnerSockets = new Map<string, WebSocket>();

@@ -5,6 +5,7 @@ import type { UnifiedStore } from './unifiedStore';
 import type { ProcessManager } from './processManager';
 import { WorktreeManager } from './worktreeManager';
 import { VerificationRunner } from './verificationRunner';
+import { PreviewManager } from './previewManager';
 import { BedrockProvider } from './bedrockProvider';
 import { parseSwarmPlan } from './planValidator';
 import { ScribeAgent } from './scribeAgent';
@@ -38,19 +39,21 @@ export class TeamCoordinator extends EventEmitter {
   private processManager: ProcessManager;
   private worktreeManager: WorktreeManager;
   private verificationRunner: VerificationRunner;
+  private previewManager: PreviewManager;
   private bedrockProvider = new BedrockProvider();
   private scribeAgent = new ScribeAgent();
   private nativeRuntime?: NativeAgentRuntime;
   private activeRuns: Map<string, { sessionId: string; abortController: AbortController; approvePlan?: () => void; pauseRequested?: boolean; resume?: () => void }> = new Map();
   private integrationLocks: Map<string, Promise<any>> = new Map();
 
-  constructor(store: UnifiedStore, processManager: ProcessManager, nativeRuntime?: NativeAgentRuntime) {
+  constructor(store: UnifiedStore, processManager: ProcessManager, nativeRuntime?: NativeAgentRuntime, previewManager?: PreviewManager) {
     super();
     this.store = store;
     this.processManager = processManager;
     this.nativeRuntime = nativeRuntime;
     this.worktreeManager = new WorktreeManager();
     this.verificationRunner = new VerificationRunner();
+    this.previewManager = previewManager || new PreviewManager();
   }
 
   public getActiveRun(runId: string) {
@@ -763,12 +766,26 @@ ${integratedDiff.diff.slice(0, 12000)}
         this.store.addCheckToRun(sessionId, runId, check);
       }
 
+      let previewUrl: string | undefined;
+      const hasVisualCheck = discoveredChecks.some((c) => c.command === 'lyra visual-critique');
+      if (hasVisualCheck) {
+        try {
+          const preview = await this.previewManager.startPreview(runId, integrationCwd);
+          previewUrl = preview.url;
+        } catch (err) {
+          console.warn('[TeamCoordinator] Ephemeral preview server start skipped or failed:', err);
+        }
+      }
+
+      const verificationContext = { previewUrl, objective, runId };
+
       let checkResults = await this.verificationRunner.runAllChecks(
         discoveredChecks,
         integrationCwd,
         (updatedCheck) => {
           this.store.updateRunCheck(sessionId, runId, updatedCheck.id, updatedCheck);
-        }
+        },
+        verificationContext
       );
 
       // Bounded repair loop if checks fail
@@ -780,7 +797,7 @@ ${integratedDiff.diff.slice(0, 12000)}
         this.store.updateRun(sessionId, runId, { repairAttempts: repairCount });
 
         const failedChecks = checkResults.results.filter((c) => c.status !== 'passed');
-        const failureEvidence = failedChecks.map((c) => `Check: ${c.name}\nCommand: ${c.command}\nOutput:\n${c.output || ''}`).join('\n---\n');
+        const failureEvidence = failedChecks.map((c) => `Check: ${c.name}\nCommand: ${c.command}\nEvidence / Output:\n${c.evidence || c.output || ''}`).join('\n---\n');
 
         this.store.appendEvent(sessionId, {
           agent: workerAgent,
@@ -825,8 +842,13 @@ Please investigate and fix the code in this workspace so all checks pass.`;
           integrationCwd,
           (updatedCheck) => {
             this.store.updateRunCheck(sessionId, runId, updatedCheck.id, updatedCheck);
-          }
+          },
+          verificationContext
         );
+      }
+
+      if (previewUrl) {
+        this.previewManager.stopPreview(runId);
       }
 
       // Update final diffs
