@@ -76,8 +76,8 @@
       "properties": {
         "lyra.hubUrl": {
           "type": "string",
-          "default": "http://localhost:3001",
-          "description": "URL to the Lyra Hub API Gateway (local, Coder, or AWS Fargate/ALB)."
+          "default": "https://api.lyra.dev",
+          "description": "URL to the Lyra Cloud Gateway (AWS Fargate, Coder, or cloud endpoint). No local background daemon required."
         },
         "lyra.autoPushGit": {
           "type": "boolean",

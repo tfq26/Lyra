@@ -12,7 +12,7 @@ export class AuthManager {
 
   public getHubUrl(): string {
     const config = vscode.workspace.getConfiguration('lyra');
-    return config.get<string>('hubUrl', 'http://localhost:3001').replace(/\/+$/, '');
+    return config.get<string>('hubUrl', 'https://api.lyra.dev').replace(/\/+$/, '');
   }
 
   public async getToken(): Promise<string | undefined> {

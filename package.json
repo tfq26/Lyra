@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n \"HUB,UI\" -c \"magenta,cyan\" \"bun run server/index.ts\" \"vite\"",
+    "dispatch": "bun run scripts/lyra-dispatch.ts",
     "dev:server": "bun run server/index.ts",
     "dev:client": "vite",
     "auth:create-user": "bun run server/create-auth-user.ts",
