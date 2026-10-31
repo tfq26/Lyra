@@ -26,49 +26,54 @@ const Layout: React.FC = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-[#07090E] text-slate-100 flex flex-col relative cyber-grid">
+    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col relative cyber-grid">
       <div className="ambient-glow" />
 
-      {/* Top Banner: FinOps / Architecture 1 Status */}
-      <div className="bg-gradient-to-r from-indigo-950/80 via-purple-950/60 to-slate-950/80 border-b border-indigo-500/20 py-1.5 px-4 text-xs font-mono text-center text-indigo-300 flex items-center justify-center gap-2 relative z-20">
-        <span className="flex h-2 w-2 relative">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-        </span>
-        <span className="font-semibold text-slate-200">Architecture 1 Active:</span>
-        <span>Zero-Daemon Ephemeral Cloud Runner on AWS Bedrock</span>
-        <span className="hidden sm:inline text-indigo-400/60">•</span>
-        <span className="hidden sm:inline text-indigo-400">Scale-to-Zero ($0.00 idle)</span>
+      {/* Top Micro-Bar: FinOps / Architecture 1 Status */}
+      <div className="border-b border-zinc-800/60 bg-zinc-950/60 backdrop-blur-md relative z-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-1.5 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="font-medium text-zinc-300">Architecture 1 Active:</span>
+            <span className="text-zinc-400">Zero-Daemon Ephemeral Cloud Runner</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-emerald-400/90 font-medium">Scale-to-Zero ($0.00 idle)</span>
+            <span className="hidden sm:inline text-zinc-700">•</span>
+            <span className="hidden sm:inline text-zinc-500">AWS Bedrock Managed Swarm</span>
+          </div>
+        </div>
       </div>
 
       {/* Main Navigation Header */}
-      <header className="sticky top-0 z-50 glass-panel border-b border-white/[0.08] backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <header className="sticky top-0 z-50 bg-[#09090b]/80 border-b border-zinc-800/60 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
           
           {/* Logo & Cluster Pill */}
           <div className="flex items-center gap-4">
             <Link to="/" className="flex items-center gap-2.5 group">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25 group-hover:shadow-indigo-500/40 transition-all duration-300">
-                <GitBranch className="h-5 w-5 text-white transform -rotate-45" />
+              <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-700/80 flex items-center justify-center shadow-sm group-hover:border-zinc-500 transition-colors">
+                <GitBranch className="h-4 w-4 text-zinc-200 transform -rotate-45" />
               </div>
               <div className="flex flex-col">
-                <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent">
+                <span className="text-sm font-semibold tracking-tight text-white flex items-center gap-1.5">
                   Lyra
-                </span>
-                <span className="text-[10px] font-mono text-indigo-400 -mt-1 tracking-wider uppercase">
-                  Cloud Swarm
+                  <span className="text-[10px] font-mono font-normal px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/50">v2.0</span>
                 </span>
               </div>
             </Link>
 
-            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[11px] font-mono text-indigo-300">
+            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-400">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              <span>Bedrock: Qwen 480B / Nova</span>
+              <span>Bedrock: Qwen 2.5 Coder / Claude 3.5 Sonnet</span>
             </div>
           </div>
 
           {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1 bg-slate-900/60 p-1 rounded-xl border border-white/[0.06]">
+          <nav className="hidden md:flex items-center gap-1 bg-zinc-900/60 p-1 rounded-lg border border-zinc-800/80">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
@@ -76,13 +81,13 @@ const Layout: React.FC = () => {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+                  className={`flex items-center gap-2 px-3 py-1 rounded-md text-xs font-medium transition-all duration-150 ${
                     isActive
-                      ? 'bg-indigo-600/30 text-white border border-indigo-500/40 shadow-sm shadow-indigo-500/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
+                      ? 'bg-zinc-800 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
                   }`}
                 >
-                  <Icon className={`h-3.5 w-3.5 ${isActive ? 'text-indigo-400' : 'text-slate-500'}`} />
+                  <Icon className={`h-3.5 w-3.5 ${isActive ? 'text-indigo-400' : 'text-zinc-500'}`} />
                   <span>{item.label}</span>
                 </Link>
               );
@@ -90,19 +95,19 @@ const Layout: React.FC = () => {
           </nav>
 
           {/* Action CTAs */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <Link
               to="/onboarding"
-              className="hidden sm:flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-zinc-950 hover:bg-zinc-200 transition-colors shadow-sm"
             >
-              <span>Get VS Code Extension</span>
-              <ExternalLink className="h-3.5 w-3.5" />
+              <span>VS Code Extension</span>
+              <ExternalLink className="h-3 w-3" />
             </Link>
 
             {/* Mobile menu toggle */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              className="md:hidden p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800"
             >
               {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
