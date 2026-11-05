@@ -2,11 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { S3Client, PutObjectCommand, DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { PreviewManager } from './previewManager';
+import { cloudTunnelManager } from './cloudTunnel';
 
 export interface PreviewDeployResult {
   success: boolean;
   previewUrl: string;
-  provider: 's3' | 'local';
+  provider: 's3' | 'tunnel' | 'local';
+  localUrl?: string;
+  publicTunnelUrl?: string;
   s3Bucket?: string;
   s3Prefix?: string;
   cloudFrontUrl?: string;
@@ -91,13 +94,26 @@ export class PreviewDeployer {
       }
     }
 
-    // Local preview fallback
+    // Local preview fallback with Cloudflare public tunnel
     try {
       const local = await this.previewManager.startPreview(runId, worktreePath);
+      let previewUrl = local.url;
+      let publicTunnelUrl: string | undefined;
+
+      try {
+        const tunnel = await cloudTunnelManager.createTunnel(local.port, runId);
+        publicTunnelUrl = tunnel.publicUrl;
+        previewUrl = tunnel.publicUrl;
+      } catch (tunnelErr) {
+        console.warn(`[PreviewDeployer] Cloudflare quick tunnel spawn failed, using local URL:`, tunnelErr);
+      }
+
       return {
         success: true,
-        previewUrl: local.url,
-        provider: 'local',
+        previewUrl,
+        provider: publicTunnelUrl ? 'tunnel' : 'local',
+        localUrl: local.url,
+        publicTunnelUrl,
       };
     } catch (err) {
       return {
@@ -110,7 +126,8 @@ export class PreviewDeployer {
   }
 
   public async teardownPreview(runId: string, tenantId = 'default'): Promise<boolean> {
-    // 1. Teardown local if running
+    // 1. Teardown tunnel and local if running
+    cloudTunnelManager.stopTunnel(runId);
     this.previewManager.stopPreview(runId);
 
     // 2. Clean S3 prefix if configured

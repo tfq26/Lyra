@@ -6,6 +6,9 @@ import { sandboxRunner, type SandboxExecutionReceipt } from '../proofSandbox/san
 import { reproTestGenerator, type ReproTestResult } from '../proofSandbox/reproTestGenerator';
 import { fastLaneExecutor } from '../fastLaneExecutor';
 import { type CiFailureEvent } from './triggerEngine';
+import { VisualCapture } from '../visualCapture';
+import { VisualCritic, type VisualCritiqueReport } from '../visualCritic';
+import { cloudTunnelManager } from '../cloudTunnel';
 
 export interface NightShiftRunReport {
   runId: string;
@@ -24,6 +27,8 @@ export interface NightShiftRunReport {
   appliedPatches: Array<{ file: string; unifiedDiff: string }>;
   verificationReceipt: SandboxExecutionReceipt;
   passedVerification: boolean;
+  visualCritique?: VisualCritiqueReport;
+  publicPreviewUrl?: string;
   proofMarkdown: string;
 }
 
@@ -68,6 +73,8 @@ export class NightShiftRunner {
     let reproReceipt: SandboxExecutionReceipt;
     let reproResult: ReproTestResult;
     let patchEdits: Array<{ file: string; unifiedDiff: string }> = [];
+    let visualCritique: VisualCritiqueReport | undefined;
+    let publicPreviewUrl: string | undefined;
     let verifyReceipt: SandboxExecutionReceipt = {
       sessionId: runId,
       command: testCmd,
@@ -228,6 +235,42 @@ Instructions:
           }
         }
       }
+
+      // Phase 4: Visual QA & Live Cloud Preview Tunnel
+      let detectedPort: number | undefined;
+      for (const port of [5175, 5174, 5173, 3000, 8080]) {
+        try {
+          const res = await fetch(`http://localhost:${port}`);
+          if (res.ok || res.status === 200 || res.status === 404) {
+            detectedPort = port;
+            break;
+          }
+        } catch {
+          // not listening
+        }
+      }
+
+      if (detectedPort) {
+        try {
+          const tunnel = await cloudTunnelManager.createTunnel(detectedPort, runId);
+          publicPreviewUrl = tunnel.publicUrl;
+
+          const visualCapture = new VisualCapture();
+          const captureReport = await visualCapture.capturePreview(`http://localhost:${detectedPort}`, runId);
+
+          if (captureReport.screenshots.length > 0) {
+            const visualCritic = new VisualCritic();
+            visualCritique = await visualCritic.evaluate(captureReport.screenshots, {
+              url: publicPreviewUrl,
+              objective: params.event.errorLog,
+              consoleErrors: captureReport.consoleErrors,
+              pageErrors: captureReport.pageErrors,
+            });
+          }
+        } catch (visErr) {
+          console.warn(`[NightShift] Visual QA / Tunnel phase skipped:`, visErr);
+        }
+      }
     } finally {
       // Clean up ephemeral worktree
       await sandboxSession.cleanup();
@@ -245,6 +288,8 @@ Instructions:
       patchEdits,
       verifyReceipt,
       durationMs,
+      visualCritique,
+      publicPreviewUrl,
     });
 
     return {
@@ -264,6 +309,8 @@ Instructions:
       appliedPatches: patchEdits,
       verificationReceipt: verifyReceipt,
       passedVerification,
+      visualCritique,
+      publicPreviewUrl,
       proofMarkdown,
     };
   }
@@ -277,10 +324,12 @@ Instructions:
     patchEdits: Array<{ file: string; unifiedDiff: string }>;
     verifyReceipt: SandboxExecutionReceipt;
     durationMs: number;
+    visualCritique?: VisualCritiqueReport;
+    publicPreviewUrl?: string;
   }): string {
     const statusPill = params.verifyReceipt.passed ? '🟢 VERIFIED GREEN' : '🔴 VERIFICATION INCOMPLETE';
 
-    return [
+    const lines = [
       `## 🛡️ Lyra Autonomous Night Shift Report (\`${params.runId}\`)`,
       `**Status**: ${statusPill} · **Runtime**: ${(params.durationMs / 1000).toFixed(1)}s`,
       ``,
@@ -314,7 +363,24 @@ Instructions:
       (params.verifyReceipt.stderr.trim() || params.verifyReceipt.stdout.trim() || 'All tests passed.').slice(-1000),
       `\`\`\``,
       `</details>`,
-    ].join('\n');
+    ];
+
+    if (params.publicPreviewUrl || params.visualCritique) {
+      lines.push(
+        ``,
+        `### 5. Live Cloud Preview & Visual QA`,
+        params.publicPreviewUrl ? `- **Public Live Preview (HTTPS)**: [${params.publicPreviewUrl}](${params.publicPreviewUrl})` : '',
+        params.visualCritique
+          ? `- **Bedrock Visual QA Score**: \`${params.visualCritique.score}/100\` (${params.visualCritique.passed ? 'Passed Craft Gate' : 'Needs Polish'})`
+          : '',
+        params.visualCritique?.summary ? `- **Critique Summary**: ${params.visualCritique.summary}` : '',
+        params.visualCritique?.defects && params.visualCritique.defects.length > 0
+          ? `- **Visual Defects**: ${params.visualCritique.defects.map((d) => `[${d.severity.toUpperCase()}] ${d.description}`).join('; ')}`
+          : ''
+      );
+    }
+
+    return lines.filter(Boolean).join('\n');
   }
 }
 
