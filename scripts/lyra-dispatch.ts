@@ -13,13 +13,55 @@
 
 import { parseArgs } from 'node:util';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
 import { UnifiedStore } from '../server/unifiedStore';
 import { TeamCoordinator } from '../server/teamCoordinator';
 import { ProcessManager } from '../server/processManager';
 import { NativeAgentRuntime } from '../server/nativeAgentRuntime';
 import { resolveOptimalModel } from '../server/modelRouter';
 import { LyraHarnessGateway } from '../server/gateway';
+
+function loadEnvFile(filePath: string) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, 'utf8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
+    if (!process.env[key]) {
+      process.env[key] = val;
+    }
+  }
+}
+
+loadEnvFile(path.join(process.cwd(), '.env.local'));
+loadEnvFile(path.join(process.cwd(), '.env'));
+
+function hydrateAwsCredentials() {
+  if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) return;
+  try {
+    const raw = execFileSync('aws', ['configure', 'export-credentials', '--format', 'process'], {
+      encoding: 'utf8',
+      timeout: 4000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parsed = JSON.parse(raw);
+    if (parsed.AccessKeyId && parsed.SecretAccessKey) {
+      process.env.AWS_ACCESS_KEY_ID = parsed.AccessKeyId;
+      process.env.AWS_SECRET_ACCESS_KEY = parsed.SecretAccessKey;
+      if (parsed.SessionToken) process.env.AWS_SESSION_TOKEN = parsed.SessionToken;
+      if (!process.env.AWS_REGION) process.env.AWS_REGION = 'us-east-1';
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+hydrateAwsCredentials();
 
 interface GitExecResult {
   stdout: string;

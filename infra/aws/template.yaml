@@ -366,8 +366,11 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility]
+                Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility, sqs:GetQueueAttributes]
                 Resource: !GetAtt RunQueue.Arn
+              - Effect: Allow
+                Action: [sqs:GetQueueAttributes]
+                Resource: !GetAtt RunQueueDlq.Arn
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
                 Resource: !Sub '${ArtifactBucket.Arn}/*'
@@ -437,6 +440,9 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt ArtifactBucket.Arn
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility, sqs:GetQueueAttributes]
+                Resource: !GetAtt RunQueue.Arn
         - PolicyName: RunnerWorkspaceAndProviderAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -507,6 +513,8 @@ Resources:
             - { Name: LYRA_DATABASE_USER, Value: lyra }
             - { Name: LYRA_DATABASE_SSL, Value: 'true' }
             - { Name: LYRA_RUN_QUEUE_URL, Value: !Ref RunQueue }
+            - { Name: LYRA_RUN_DLQ_URL, Value: !Ref RunQueueDlq }
+            - { Name: LYRA_EMIT_EMF, Value: 'true' }
             - { Name: LYRA_ARTIFACT_BUCKET, Value: !Ref ArtifactBucket }
             - { Name: LYRA_STRANDS_SESSION_BUCKET, Value: !Ref ArtifactBucket }
             - { Name: LYRA_ECS_CLUSTER, Value: !Ref Cluster }
@@ -556,6 +564,8 @@ Resources:
             - { SourceVolume: Workspace, ContainerPath: /workspace, ReadOnly: false }
           Environment:
             - { Name: LYRA_ARTIFACT_BUCKET, Value: !Ref ArtifactBucket }
+            - { Name: LYRA_RUN_QUEUE_URL, Value: !Ref RunQueue }
+            - { Name: LYRA_RUN_DLQ_URL, Value: !Ref RunQueueDlq }
             - { Name: LYRA_STORAGE_PATH, Value: /data/lyra }
             - { Name: LYRA_HOSTED, Value: 'true' }
             - { Name: LYRA_TENANT_ID, Value: !Ref TenantId }
@@ -602,6 +612,8 @@ Outputs:
     Value: !Ref ArtifactBucket
   RunQueueUrl:
     Value: !Ref RunQueue
+  RunQueueDlqUrl:
+    Value: !Ref RunQueueDlq
   RunnerTaskDefinitionArn:
     Value: !Ref RunnerTaskDefinition
   EcsClusterName:

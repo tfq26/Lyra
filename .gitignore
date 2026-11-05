@@ -45,4 +45,10 @@ src-tauri/gen/
 .bun-temp/
 .lyra-store/
 .lyra/
+server/data/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+.auth-secret
+
 

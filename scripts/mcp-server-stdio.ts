@@ -83,6 +83,59 @@ async function executeMcpTool(toolName: string, args: Record<string, any>) {
         };
       }
     }
+
+    if (toolName === 'lyra_council_analyze') {
+      const res = await fetch(`${hubUrl}/api/gateway/council`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(args),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        return {
+          content: [{
+            type: 'text' as const,
+            text: data.formattedMarkdown || JSON.stringify(data, null, 2),
+          }],
+        };
+      }
+    }
+
+    if (toolName === 'lyra_sync_session') {
+      const params = new URLSearchParams();
+      if (args.sessionId) params.set('sessionId', args.sessionId);
+      if (args.sinceSeq !== undefined) params.set('sinceSeq', String(args.sinceSeq));
+      if (args.workspacePath) params.set('workspacePath', args.workspacePath);
+      const res = await fetch(`${hubUrl}/api/gateway/sessions/sync?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify(data, null, 2),
+          }],
+        };
+      }
+    }
+
+    if (toolName === 'lyra_nightshift_investigate') {
+      const res = await fetch(`${hubUrl}/api/nightshift/investigate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(args),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify(data, null, 2),
+          }],
+        };
+      }
+    }
   } catch (err: any) {
     if (!err.message?.includes('fetch failed') && !err.message?.includes('ConnectionRefused')) {
       throw err;

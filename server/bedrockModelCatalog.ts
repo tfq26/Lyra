@@ -1,9 +1,15 @@
-import { BedrockClient, ListFoundationModelsCommand } from '@aws-sdk/client-bedrock';
+import {
+  BedrockClient,
+  ListFoundationModelsCommand,
+  ListInferenceProfilesCommand,
+} from '@aws-sdk/client-bedrock';
 
 export interface ActiveBedrockModel {
   modelId: string;
   modelName: string;
   providerName: string;
+  inferenceProfileId?: string;
+  supportsPromptCaching?: boolean;
   inputModalities?: string[];
   outputModalities?: string[];
   status: 'ACTIVE' | 'LEGACY';
@@ -11,10 +17,21 @@ export interface ActiveBedrockModel {
   recommendedSuccessor?: string;
 }
 
+export interface CrossRegionInferenceProfile {
+  inferenceProfileId: string;
+  inferenceProfileName: string;
+  status: 'ACTIVE';
+  targetModelIds: string[];
+  regions: string[];
+}
+
 // Known legacy deprecations mapping to active successors
 const KNOWN_LEGACY_SUCCESSORS: Record<string, string> = {
   'anthropic.claude-sonnet-4-5-20250929-v1:0': 'anthropic.claude-sonnet-5',
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 'anthropic.claude-sonnet-5',
+  'anthropic.claude-3-5-sonnet': 'anthropic.claude-sonnet-5',
+  'anthropic.claude-3-5-sonnet-20241022-v2:0': 'anthropic.claude-sonnet-5',
+  'claude-3-5-sonnet': 'anthropic.claude-sonnet-5',
   'anthropic.claude-opus-4-1-20250805-v1:0': 'anthropic.claude-opus-5',
   'anthropic.claude-v2': 'anthropic.claude-sonnet-5',
   'anthropic.claude-v2:1': 'anthropic.claude-sonnet-5',
@@ -24,6 +41,27 @@ const KNOWN_LEGACY_SUCCESSORS: Record<string, string> = {
   'writer.palmyra-x4-v1:0': 'writer.palmyra-vision-7b',
 };
 
+// Canonical Cross-Region Inference Profile mappings (US geographic routing for higher quota & HA)
+const DEFAULT_CROSS_REGION_PROFILES: Record<string, string> = {
+  'anthropic.claude-sonnet-5': 'us.anthropic.claude-sonnet-5',
+  'anthropic.claude-sonnet-5-5': 'us.anthropic.claude-sonnet-5-5',
+  'anthropic.claude-opus-5-5': 'us.anthropic.claude-opus-5-5',
+  'anthropic.claude-opus-5': 'us.anthropic.claude-opus-5',
+  'anthropic.claude-sonnet-4-6': 'us.anthropic.claude-sonnet-4-6',
+  'anthropic.claude-opus-4-6-v1': 'us.anthropic.claude-opus-4-6-v1',
+  'anthropic.claude-haiku-4-5-20251001-v1:0': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  'anthropic.claude-haiku-5-5': 'us.anthropic.claude-haiku-5-5',
+  'deepseek.r1-v1:0': 'us.deepseek.r1-v1:0',
+  'us.deepseek.r1-v1:0': 'us.deepseek.r1-v1:0',
+  'amazon.nova-pro-v1:0': 'us.amazon.nova-pro-v1:0',
+  'us.amazon.nova-pro-v1:0': 'us.amazon.nova-pro-v1:0',
+  'amazon.nova-2-lite-v1:0': 'us.amazon.nova-2-lite-v1:0',
+  'meta.llama3-3-70b-instruct-v1:0': 'us.meta.llama3-3-70b-instruct-v1:0',
+  'us.meta.llama3-3-70b-instruct-v1:0': 'us.meta.llama3-3-70b-instruct-v1:0',
+  'meta.llama4-scout-17b-instruct-v1:0': 'us.meta.llama4-scout-17b-instruct-v1:0',
+  'meta.llama4-maverick-17b-instruct-v1:0': 'us.meta.llama4-maverick-17b-instruct-v1:0',
+};
+
 // Curated active fallback catalog matching AWS Bedrock Live Catalog (us-east-2)
 const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
   // Anthropic
@@ -31,6 +69,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-sonnet-5',
     modelName: 'Claude Sonnet 5',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-sonnet-5',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -40,6 +80,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-sonnet-5-5',
     modelName: 'Claude Sonnet 5.5',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-sonnet-5-5',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -49,6 +91,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-opus-5-5',
     modelName: 'Claude Opus 5.5',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-opus-5-5',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -58,6 +102,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-opus-5',
     modelName: 'Claude Opus 5',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-opus-5',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -67,6 +113,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-sonnet-4-6',
     modelName: 'Claude Sonnet 4.6',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-sonnet-4-6',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -76,6 +124,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-opus-4-6-v1',
     modelName: 'Claude Opus 4.6',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-opus-4-6-v1',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -85,6 +135,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
     modelName: 'Claude Haiku 4.5',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -94,6 +146,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'anthropic.claude-haiku-5-5',
     modelName: 'Claude Haiku 5.5',
     providerName: 'Anthropic',
+    inferenceProfileId: 'us.anthropic.claude-haiku-5-5',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -104,6 +158,7 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'openai.gpt-6-astra',
     modelName: 'GPT-6 Astra',
     providerName: 'OpenAI',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -113,6 +168,7 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'openai.gpt-5.6-terra',
     modelName: 'GPT-5.6 Terra',
     providerName: 'OpenAI',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -123,6 +179,7 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'deepseek.v3.2',
     modelName: 'DeepSeek V3.2',
     providerName: 'DeepSeek',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -132,6 +189,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'deepseek.r1-v1:0',
     modelName: 'DeepSeek R1',
     providerName: 'DeepSeek',
+    inferenceProfileId: 'us.deepseek.r1-v1:0',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -142,6 +201,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'amazon.nova-pro-v1:0',
     modelName: 'Amazon Nova Pro',
     providerName: 'Amazon',
+    inferenceProfileId: 'us.amazon.nova-pro-v1:0',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -151,6 +212,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'amazon.nova-2-lite-v1:0',
     modelName: 'Amazon Nova 2 Lite',
     providerName: 'Amazon',
+    inferenceProfileId: 'us.amazon.nova-2-lite-v1:0',
+    supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -161,6 +224,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'meta.llama4-scout-17b-instruct-v1:0',
     modelName: 'Llama 4 Scout 17B Instruct',
     providerName: 'Meta',
+    inferenceProfileId: 'us.meta.llama4-scout-17b-instruct-v1:0',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -170,6 +235,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'meta.llama4-maverick-17b-instruct-v1:0',
     modelName: 'Llama 4 Maverick 17B Instruct',
     providerName: 'Meta',
+    inferenceProfileId: 'us.meta.llama4-maverick-17b-instruct-v1:0',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -179,6 +246,8 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'meta.llama3-3-70b-instruct-v1:0',
     modelName: 'Llama 3.3 70B Instruct',
     providerName: 'Meta',
+    inferenceProfileId: 'us.meta.llama3-3-70b-instruct-v1:0',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -189,6 +258,7 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'xai.grok-4.7',
     modelName: 'Grok 4.7',
     providerName: 'xAI',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -199,6 +269,7 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     modelId: 'qwen.qwen3-coder-480b-a35b-v1:0',
     modelName: 'Qwen3 Coder 480B Instruct',
     providerName: 'Qwen',
+    supportsPromptCaching: false,
     inputModalities: ['TEXT'],
     outputModalities: ['TEXT'],
     status: 'ACTIVE',
@@ -209,6 +280,7 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
 export class BedrockModelCatalog {
   private client?: BedrockClient;
   private cache: { models: ActiveBedrockModel[]; fetchedAt: number } | null = null;
+  private profileCache: { profiles: CrossRegionInferenceProfile[]; fetchedAt: number } | null = null;
   private cacheTtlMs = 60 * 60 * 1000; // 1 hour TTL
 
   constructor(options?: { region?: string }) {
@@ -241,27 +313,33 @@ export class BedrockModelCatalog {
 
     if (this.client) {
       try {
-        const response = await this.client.send(new ListFoundationModelsCommand({
-          byInferenceType: 'ON_DEMAND',
-        }));
+        const response = await this.client.send(
+          new ListFoundationModelsCommand({
+            byInferenceType: 'ON_DEMAND',
+          })
+        );
 
         if (response.modelSummaries && response.modelSummaries.length > 0) {
-          // Filter strictly: exclude models marked with status === 'LEGACY'
           const active = response.modelSummaries
             .filter((m) => {
               const status = m.modelLifecycle?.status;
               const isKnownLegacy = Boolean(m.modelId && KNOWN_LEGACY_SUCCESSORS[m.modelId]);
-              return status !== 'LEGACY' && !isKnownLegacy;
+              return status !== 'LEGACY' && !isKnownLegacy && !m.modelId?.includes('claude-sonnet-4-5');
             })
-            .map((m): ActiveBedrockModel => ({
-              modelId: m.modelId || '',
-              modelName: m.modelName || m.modelId || '',
-              providerName: m.providerName || '',
-              inputModalities: m.inputModalities as string[] | undefined,
-              outputModalities: m.outputModalities as string[] | undefined,
-              status: 'ACTIVE',
-              isLegacy: false,
-            }));
+            .map((m): ActiveBedrockModel => {
+              const id = m.modelId || '';
+              return {
+                modelId: id,
+                modelName: m.modelName || id,
+                providerName: m.providerName || '',
+                inferenceProfileId: DEFAULT_CROSS_REGION_PROFILES[id],
+                supportsPromptCaching: id.includes('claude') || id.includes('nova'),
+                inputModalities: m.inputModalities as string[] | undefined,
+                outputModalities: m.outputModalities as string[] | undefined,
+                status: 'ACTIVE',
+                isLegacy: false,
+              };
+            });
 
           this.cache = { models: active, fetchedAt: now };
 
@@ -284,6 +362,77 @@ export class BedrockModelCatalog {
   }
 
   /**
+   * Discovers AWS Bedrock System-Defined Cross-Region Inference Profiles (`us.*`)
+   * for automatic multi-region quota aggregation and high availability.
+   */
+  public async getCrossRegionInferenceProfiles(options?: { forceRefresh?: boolean }): Promise<{
+    profiles: CrossRegionInferenceProfile[];
+    source: 'bedrock_api' | 'curated_profiles';
+  }> {
+    const now = Date.now();
+    if (!options?.forceRefresh && this.profileCache && now - this.profileCache.fetchedAt < this.cacheTtlMs) {
+      return { profiles: this.profileCache.profiles, source: 'bedrock_api' };
+    }
+
+    if (this.client) {
+      try {
+        const res = await this.client.send(
+          new ListInferenceProfilesCommand({
+            typeEquals: 'SYSTEM_DEFINED',
+          })
+        );
+        if (res.inferenceProfileSummaries && res.inferenceProfileSummaries.length > 0) {
+          const profiles: CrossRegionInferenceProfile[] = res.inferenceProfileSummaries
+            .filter((p) => p.status === 'ACTIVE' && p.inferenceProfileId)
+            .map((p) => ({
+              inferenceProfileId: p.inferenceProfileId!,
+              inferenceProfileName: p.inferenceProfileName || p.inferenceProfileId!,
+              status: 'ACTIVE',
+              targetModelIds: (p.models || []).map((m) => m.modelArn || '').filter(Boolean),
+              regions: ['us-east-1', 'us-east-2', 'us-west-2'],
+            }));
+          this.profileCache = { profiles, fetchedAt: now };
+          return { profiles, source: 'bedrock_api' };
+        }
+      } catch {
+        // Fallback cleanly when offline or without IAM ListInferenceProfiles permission
+      }
+    }
+
+    const fallbackProfiles: CrossRegionInferenceProfile[] = Object.entries(DEFAULT_CROSS_REGION_PROFILES).map(
+      ([baseModelId, profileId]) => ({
+        inferenceProfileId: profileId,
+        inferenceProfileName: `US Cross-Region (${baseModelId})`,
+        status: 'ACTIVE',
+        targetModelIds: [baseModelId],
+        regions: ['us-east-1', 'us-east-2', 'us-west-2'],
+      })
+    );
+    return { profiles: fallbackProfiles, source: 'curated_profiles' };
+  }
+
+  /**
+   * Resolves a base foundation model ID to its Cross-Region Inference Profile ID
+   * when invoking Bedrock Converse / ConverseStream for maximum throughput & resiliency.
+   */
+  public resolveCrossRegionProfileId(modelId: string): string {
+    const active = this.resolveActiveModel(modelId).modelId;
+    return DEFAULT_CROSS_REGION_PROFILES[active] || active;
+  }
+
+  /**
+   * Checks whether a model supports Amazon Bedrock Prompt Caching (`cachePoint`).
+   */
+  public supportsPromptCaching(modelId: string): boolean {
+    const normalized = modelId.toLowerCase();
+    return normalized.includes('claude-sonnet') ||
+      normalized.includes('claude-opus') ||
+      normalized.includes('claude-haiku') ||
+      normalized.includes('nova-pro') ||
+      normalized.includes('nova-2-lite');
+  }
+
+  /**
    * Checks if a model ID is in the legacy state.
    */
   public isLegacyModel(modelId: string): boolean {
@@ -302,7 +451,7 @@ export class BedrockModelCatalog {
     warning?: string;
   } {
     if (this.isLegacyModel(requestedModelId)) {
-      const successor = KNOWN_LEGACY_SUCCESSORS[requestedModelId] || 'us.anthropic.claude-sonnet-4-6';
+      const successor = KNOWN_LEGACY_SUCCESSORS[requestedModelId] || 'anthropic.claude-sonnet-5';
       return {
         modelId: successor,
         wasLegacy: true,

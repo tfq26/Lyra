@@ -5,10 +5,14 @@
  * (Antigravity, OpenAI Codex, Claude Code, Cursor, etc.) via standardized MCP tools.
  */
 
+import path from 'node:path';
 import { LyraHarnessGateway } from './gateway';
 import { UnifiedStore } from './unifiedStore';
 import { PreviewDeployer } from './previewDeployer';
 import { BedrockGuardrailService } from './bedrockGuardrails';
+import { AHPServer } from './ahpProtocol';
+import { modelCouncil } from './modelCouncil';
+import { nightShiftRunner } from './nightShift/nightShiftRunner';
 
 export interface McpToolDefinition {
   name: string;
@@ -19,8 +23,11 @@ export interface McpToolDefinition {
 export class LyraHarnessMcpServer {
   private previewDeployer = new PreviewDeployer();
   private guardrailService = new BedrockGuardrailService();
+  private ahpServer: AHPServer;
 
-  constructor(private gateway: LyraHarnessGateway, private store: UnifiedStore) {}
+  constructor(private gateway: LyraHarnessGateway, private store: UnifiedStore) {
+    this.ahpServer = new AHPServer(store, { gateway });
+  }
 
   public getTools(): McpToolDefinition[] {
     return [
@@ -218,6 +225,109 @@ export class LyraHarnessMcpServer {
               description: 'Optional specific run ID to retrieve handoff details for.',
             },
           },
+        },
+      },
+      {
+        name: 'lyra_council_analyze',
+        description:
+          'Run Lyra Multi-Model Council & Cross-Document RAG Analyzer where the Pareto Model Selector dynamically assigns 3 orthogonal Bedrock models + a Chair model based on role complexity, policy profile, and live latency/throttle health, persisting the insight to 24/7 Hermes Repo Memory.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            question: {
+              type: 'string',
+              description: 'The architecture, debugging, security, or cross-document RAG question to analyze.',
+            },
+            workspacePath: {
+              type: 'string',
+              description: 'Optional repository path.',
+            },
+            sessionId: {
+              type: 'string',
+              description: 'Optional cloud session ID to journal the council turn into.',
+            },
+            mode: {
+              type: 'string',
+              enum: ['rag-synthesis', 'architecture-debate', 'security-triangulation', 'heisenbug-rca'],
+              description: 'Optional specialized council mode.',
+            },
+            policyProfile: {
+              type: 'string',
+              enum: ['frugal', 'balanced', 'frontier'],
+              description: 'Optional Pareto policy profile guiding how the Model Selector chooses the council seats and Chair.',
+            },
+            seatModels: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional explicit model ID overrides for any of the 3 specialist seats.',
+            },
+            chairModelId: {
+              type: 'string',
+              description: 'Optional explicit model ID override for the synthesis Chair.',
+            },
+            documentPaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional explicit workspace file paths to include in the RAG shards.',
+            },
+          },
+          required: ['question'],
+        },
+      },
+      {
+        name: 'lyra_sync_session',
+        description:
+          'Sync cloud chat history (sequence-delta messages since sinceSeq) and 24/7 Hermes Repo Memory across devices for any harness (DeepSeek Harness dsh, VS Code, Claude Code, Codex, Antigravity).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sessionId: {
+              type: 'string',
+              description: 'Optional cloud session ID (defaults to latest active session for workspace).',
+            },
+            sinceSeq: {
+              type: 'number',
+              default: 0,
+              description: 'Last sequence number seen on this device; returns only messages newer than sinceSeq.',
+            },
+            workspacePath: {
+              type: 'string',
+              description: 'Optional workspace path to match active session.',
+            },
+          },
+        },
+      },
+      {
+        name: 'lyra_nightshift_investigate',
+        description:
+          'Trigger Lyra Autonomous Night Shift & Proof Sandbox: maps runtime/CI failure stack traces to exact AST nodes via Living Repo Brain, writes an automated reproduction test (RED), applies surgical patches with Bedrock models, executes sandbox verification (GREEN), and outputs an interactive proof ticket.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            errorLog: {
+              type: 'string',
+              description: 'The stack trace, CI failure log, or bug description to autonomously investigate and prove.',
+            },
+            workspacePath: {
+              type: 'string',
+              description: 'Optional path to the repository workspace (defaults to current working directory).',
+            },
+            source: {
+              type: 'string',
+              enum: ['ci_failure', 'sentry', 'cloudwatch', 'manual'],
+              description: 'Optional source of the incident.',
+            },
+            testCommand: {
+              type: 'string',
+              description: 'Optional test runner command (e.g. "bun", "npm", "pytest"). Defaults to "bun".',
+            },
+            testArgs: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional arguments for the test runner. Defaults to ["test"].',
+            },
+          },
+          required: ['errorLog'],
         },
       },
     ];
@@ -457,6 +567,99 @@ export class LyraHarnessMcpServer {
           content: [{
             type: 'text',
             text: JSON.stringify(report, null, 2),
+          }],
+        };
+      }
+
+      case 'lyra_council_analyze': {
+        const sessionId = args.sessionId || 'session-main';
+        if (!this.ahpServer.getSession(sessionId)) {
+          this.ahpServer.createSession({
+            sessionId,
+            title: `[Council] ${String(args.question).slice(0, 40)}`,
+            workspacePath: args.workspacePath || process.cwd(),
+          });
+        }
+        this.ahpServer.appendMessage(sessionId, {
+          role: 'user',
+          content: String(args.question),
+          harness: 'mcp-council',
+        });
+        const result = await modelCouncil.analyze({
+          question: String(args.question),
+          workspacePath: args.workspacePath,
+          sessionId,
+          mode: args.mode,
+          policyProfile: args.policyProfile,
+          seatModels: args.seatModels,
+          chairModelId: args.chairModelId,
+          documentPaths: args.documentPaths,
+        });
+        this.ahpServer.appendMessage(sessionId, {
+          role: 'assistant',
+          content: result.formattedMarkdown,
+          thinking: `Multi-Model Council (${result.mode})`,
+          lane: 'ask',
+          harness: 'mcp-council',
+        });
+        return {
+          content: [{
+            type: 'text',
+            text: result.formattedMarkdown,
+          }],
+        };
+      }
+
+      case 'lyra_sync_session': {
+        const delta = this.ahpServer.syncSessionDelta({
+          sessionId: args.sessionId,
+          sinceSeq: Number(args.sinceSeq || 0),
+          workspacePath: args.workspacePath,
+        });
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify(delta, null, 2),
+          }],
+        };
+      }
+
+      case 'lyra_nightshift_investigate': {
+        const report = await nightShiftRunner.runInvestigation({
+          event: {
+            id: `mcp-${Date.now()}`,
+            source: (args.source as any) || 'manual',
+            repository: args.workspacePath ? path.basename(args.workspacePath) : 'local',
+            branch: 'main',
+            commitSha: 'HEAD',
+            errorLog: args.errorLog,
+            receivedAt: new Date().toISOString(),
+          },
+          workspacePath: args.workspacePath || process.cwd(),
+          testCommand: args.testCommand,
+          testArgs: args.testArgs,
+        });
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              runId: report.runId,
+              durationMs: report.durationMs,
+              passedVerification: report.passedVerification,
+              mappedRootCause: report.mappedRootCause,
+              reproductionReceipt: {
+                passed: report.reproductionReceipt.passed,
+                exitCode: report.reproductionReceipt.exitCode,
+                failingTests: report.reproductionReceipt.failingTests,
+              },
+              verificationReceipt: {
+                passed: report.verificationReceipt.passed,
+                exitCode: report.verificationReceipt.exitCode,
+              },
+              appliedPatches: report.appliedPatches,
+              proofTicket: report.proofMarkdown,
+            }, null, 2),
           }],
         };
       }

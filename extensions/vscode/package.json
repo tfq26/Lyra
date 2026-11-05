@@ -1,8 +1,8 @@
 {
   "name": "lyra-swarm",
   "displayName": "Lyra Autonomous Cloud Swarm",
-  "description": "Always-available AWS Bedrock autonomous engineering swarm for VS Code & Coder",
-  "version": "1.0.0",
+  "description": "Always-available AWS Bedrock autonomous engineering swarm & 3-lane adaptive harness for VS Code",
+  "version": "1.3.0",
   "publisher": "lyra-ai",
   "engines": {
     "vscode": "^1.80.0"
@@ -17,6 +17,7 @@
   "activationEvents": [
     "onView:lyraSwarmSidebar",
     "onCommand:lyra.openStudio",
+    "onCommand:lyra.openUniversalChat",
     "onCommand:lyra.dispatch",
     "onCommand:lyra.signIn"
   ],
@@ -33,21 +34,42 @@
     "views": {
       "lyra-swarm": [
         {
+          "id": "lyraCloudSessions",
+          "name": "Sessions"
+        },
+        {
           "type": "webview",
           "id": "lyraSwarmSidebar",
-          "name": "Lyra Cockpit"
+          "name": "Task Runner"
         }
       ]
     },
     "commands": [
       {
+        "command": "lyra.openUniversalChat",
+        "title": "Open Agent Sessions",
+        "category": "Lyra"
+      },
+      {
+        "command": "lyra.newCloudSession",
+        "title": "New Session",
+        "category": "Lyra",
+        "icon": "$(plus)"
+      },
+      {
+        "command": "lyra.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "Lyra",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "lyra.openStudio",
-        "title": "Lyra: Open Swarm Studio Dashboard",
+        "title": "Open Studio Dashboard",
         "category": "Lyra"
       },
       {
         "command": "lyra.dispatch",
-        "title": "Lyra: Dispatch Feature to Cloud Swarm",
+        "title": "Dispatch Task",
         "category": "Lyra"
       },
       {
@@ -71,24 +93,48 @@
         "category": "Lyra"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "lyra.newCloudSession",
+          "when": "view == lyraCloudSessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lyra.refreshSessions",
+          "when": "view == lyraCloudSessions",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "Lyra Swarm",
       "properties": {
         "lyra.hubUrl": {
           "type": "string",
-          "default": "https://api.lyra.dev",
-          "description": "URL to the Lyra Cloud Gateway (AWS Fargate, Coder, or cloud endpoint). No local background daemon required."
+          "default": "http://localhost:3001",
+          "description": "URL to the Lyra Cloud Gateway (http://localhost:3001 for local/LAN, or your deployed AWS Fargate/ECS endpoint). No local background daemon required."
         },
         "lyra.autoPushGit": {
           "type": "boolean",
           "default": true,
           "description": "Automatically commit and push working snapshots before dispatching to the cloud swarm."
+        },
+        "lyra.defaultPolicyProfile": {
+          "type": "string",
+          "enum": ["frugal", "balanced", "frontier"],
+          "default": "balanced",
+          "description": "Default AWS Bedrock Pareto routing policy profile."
+        },
+        "lyra.autoApplyFastPatch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically apply syntax-verified Lane 1 Fast Patches without requiring 1-click confirmation."
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "bun run build",
     "build": "bun build ./src/extension.ts --outfile=./dist/extension.js --target=node --external=vscode",
     "watch": "bun build ./src/extension.ts --outfile=./dist/extension.js --target=node --external=vscode --watch"
   },

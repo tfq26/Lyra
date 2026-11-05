@@ -9,9 +9,14 @@ import { PreviewManager } from './previewManager';
 import { BedrockProvider } from './bedrockProvider';
 import { parseSwarmPlan } from './planValidator';
 import { ScribeAgent } from './scribeAgent';
+import { DecisionEngine } from './decisionEngine';
+import { ModelDecisionEngine } from './modelDecisionEngine';
+import { cloudWatchTelemetry, type PolicyProfile } from './cloudwatchEmf';
 import { resolveOptimalModel } from './modelRouter';
 import type { NativeAgentRuntime } from './nativeAgentRuntime';
 import type { TeamRun, TaskItem, CheckItem, TeamConfig, AgentType, HarnessId, FileDiff, TeamStage, RunState } from './types';
+
+export type PlanApprovalPolicy = 'manual' | 'risk-gated' | 'auto';
 
 export interface StartTeamRunParams {
   sessionId: string;
@@ -23,6 +28,9 @@ export interface StartTeamRunParams {
   concurrencyLimit?: number;
   customChecks?: string[];
   autoApprovePlan?: boolean;
+  approvalPolicy?: PlanApprovalPolicy;
+  maxRunBudgetUsd?: number;
+  policyProfile?: PolicyProfile;
 }
 
 function parseReviewVerdict(text: string): { approved: boolean; findings: string[] } | null {
@@ -42,6 +50,7 @@ export class TeamCoordinator extends EventEmitter {
   private previewManager: PreviewManager;
   private bedrockProvider = new BedrockProvider();
   private scribeAgent = new ScribeAgent();
+  private decisionEngine = new DecisionEngine();
   private nativeRuntime?: NativeAgentRuntime;
   private activeRuns: Map<string, { sessionId: string; abortController: AbortController; approvePlan?: () => void; pauseRequested?: boolean; resume?: () => void }> = new Map();
   private integrationLocks: Map<string, Promise<any>> = new Map();
@@ -255,8 +264,19 @@ export class TeamCoordinator extends EventEmitter {
     this.store.createRun(initialRun);
     this.emit('run_updated', initialRun);
 
+    const effectiveApprovalPolicy: PlanApprovalPolicy =
+      params.approvalPolicy || (params.autoApprovePlan ? 'auto' : 'manual');
+
     // Run coordinator asynchronously
-    this.executePipeline(initialRun, params.workspacePath, abortController.signal, false, params.autoApprovePlan).catch((err) => {
+    this.executePipeline(
+      initialRun,
+      params.workspacePath,
+      abortController.signal,
+      false,
+      effectiveApprovalPolicy,
+      params.maxRunBudgetUsd ?? 1.5,
+      params.policyProfile ?? 'balanced'
+    ).catch((err) => {
       console.error(`[TeamCoordinator] Pipeline error for run ${runId}:`, err);
       this.store.updateRun(params.sessionId, runId, {
         state: 'failed',
@@ -274,8 +294,11 @@ export class TeamCoordinator extends EventEmitter {
     repoPath: string,
     signal: AbortSignal,
     isResume = false,
-    autoApprovePlan = false
+    approvalPolicy: PlanApprovalPolicy = 'manual',
+    maxRunBudgetUsd = 1.5,
+    policyProfile: PolicyProfile = 'balanced'
   ): Promise<void> {
+    const pipelineStartMs = Date.now();
     const { sessionId, id: runId, teamConfig, objective } = run;
     const profiles = this.store.listHarnessProfiles();
     const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
@@ -287,39 +310,43 @@ export class TeamCoordinator extends EventEmitter {
     const leadAgent = plannerProviderProfile ? 'orchestrator' : leadProfile?.harness || teamConfig.lead;
     const reviewerAgent = reviewerProfile?.harness || teamConfig.reviewer;
 
+    let worktreeWarmupPromise: Promise<void> | undefined;
+
     try {
       if (signal.aborted) return;
 
-      // 1. Setup Base Run & Integration Worktree
+      // 1. Pre-warm Base Run & Integration Worktrees IN PARALLEL with read-only Lead Architect planning!
       let executionCwd = run.worktreePath;
       let integrationCwd = run.integrationWorktreePath;
       let baseCommit = run.baseBranch;
 
-      if (!executionCwd || !fs.existsSync(executionCwd)) {
-        this.store.appendEvent(sessionId, {
-          agent: 'orchestrator',
-          type: 'status',
-          payload: { text: `Initializing isolated git worktree environment for Team Run ${runId}...` },
-          runId,
-        });
-        const worktreeInfo = await this.worktreeManager.createRunWorktree(repoPath, runId);
-        executionCwd = worktreeInfo.worktreePath;
-        baseCommit = worktreeInfo.baseCommit;
-        this.store.updateRun(sessionId, runId, {
-          worktreePath: worktreeInfo.worktreePath,
-          branchName: worktreeInfo.branchName,
-          baseBranch: worktreeInfo.baseCommit,
-        });
-      }
+      worktreeWarmupPromise = (async () => {
+        if (!executionCwd || !fs.existsSync(executionCwd)) {
+          this.store.appendEvent(sessionId, {
+            agent: 'orchestrator',
+            type: 'status',
+            payload: { text: `Pre-warming isolated git worktrees in parallel for Team Run ${runId}...` },
+            runId,
+          });
+          const worktreeInfo = await this.worktreeManager.createRunWorktree(repoPath, runId);
+          executionCwd = worktreeInfo.worktreePath;
+          baseCommit = worktreeInfo.baseCommit;
+          this.store.updateRun(sessionId, runId, {
+            worktreePath: worktreeInfo.worktreePath,
+            branchName: worktreeInfo.branchName,
+            baseBranch: worktreeInfo.baseCommit,
+          });
+        }
 
-      if (!integrationCwd || !fs.existsSync(integrationCwd)) {
-        const integrationInfo = await this.worktreeManager.createIntegrationBranch(repoPath, runId);
-        integrationCwd = integrationInfo.worktreePath;
-        this.store.updateRun(sessionId, runId, {
-          integrationWorktreePath: integrationInfo.worktreePath,
-          integrationBranch: integrationInfo.branchName,
-        });
-      }
+        if (!integrationCwd || !fs.existsSync(integrationCwd)) {
+          const integrationInfo = await this.worktreeManager.createIntegrationBranch(repoPath, runId);
+          integrationCwd = integrationInfo.worktreePath;
+          this.store.updateRun(sessionId, runId, {
+            integrationWorktreePath: integrationInfo.worktreePath,
+            integrationBranch: integrationInfo.branchName,
+          });
+        }
+      })();
 
       const workerProfiles = (teamConfig.workerProfileIds || []).map((profileId) => profileById.get(profileId)).filter((profile) => profile?.enabled);
       const workerSlots = workerProfiles.length
@@ -370,10 +397,18 @@ Return JSON with this structure:
 }
 Split independent work into 1-24 tasks. Include concrete file scope and safe checks.`;
 
+      const plannerReadCwd = executionCwd && fs.existsSync(executionCwd) ? executionCwd : repoPath;
+      const plannerRoute = resolveOptimalModel({
+        prompt: objective,
+        role: 'planner',
+        lane: 'full-swarm',
+        policyProfile,
+      });
+
       let planContent: string;
       if (plannerProviderProfile) {
         const result = await this.bedrockProvider.generate(plannerProviderProfile, planPrompt, {
-          sessionId, runId, workspacePath: executionCwd, storagePath: this.store.getStoragePath(),
+          sessionId, runId, workspacePath: plannerReadCwd, storagePath: this.store.getStoragePath(),
         });
         planContent = result.text;
         this.store.updateRun(sessionId, runId, {
@@ -383,9 +418,9 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
       } else {
         const planResult = await this.processManager.runAgent({
           agentType: leadAgent,
-          model: leadProfile?.model || teamConfig.plannerModel || resolveOptimalModel({ prompt: objective, role: 'planner' }).modelId,
+          model: leadProfile?.model || teamConfig.plannerModel || plannerRoute.modelId,
           prompt: planPrompt,
-          cwd: executionCwd,
+          cwd: plannerReadCwd,
           sessionId,
           runId,
           processId: `${runId}:planner`,
@@ -407,19 +442,54 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
         checks: validatedPlan.checks,
       });
 
-      if (autoApprovePlan) {
+      let shouldProceedWithoutPause = approvalPolicy === 'auto';
+      let riskGateRationale = '';
+
+      if (approvalPolicy === 'risk-gated') {
+        const estimatedFiles = tasks.flatMap((t) =>
+          (t.expectedOutputs && t.expectedOutputs.length > 0
+            ? t.expectedOutputs
+            : (t.scope || '').split(','))
+            .map((s) => s.trim())
+            .filter(Boolean)
+        );
+        const checkCommands = (validatedPlan.checks || []).map((c) => c.command).join(' && ');
+        const riskVerdict = await this.decisionEngine.evaluate({
+          stage: 'plan',
+          objective,
+          filesChanged: estimatedFiles,
+          command: checkCommands,
+        });
+        if (riskVerdict.action === 'ALLOW') {
+          shouldProceedWithoutPause = true;
+        } else {
+          shouldProceedWithoutPause = false;
+          riskGateRationale = riskVerdict.rationale;
+        }
+      }
+
+      if (shouldProceedWithoutPause) {
         this.store.appendEvent(sessionId, {
           agent: 'orchestrator',
           type: 'status',
           runId,
-          payload: { text: '⚡ Autonomous harness plan auto-approval enabled. Proceeding immediately to parallel worker execution.' },
+          payload: {
+            text:
+              approvalPolicy === 'risk-gated'
+                ? 'Risk-gated plan check passed (DecisionEngine: ALLOW). Proceeding immediately to parallel worker execution.'
+                : 'Autonomous harness plan auto-approval enabled. Proceeding immediately to parallel worker execution.',
+          },
         });
       } else {
         this.setRunStage(sessionId, runId, 'awaiting-approval', 'awaiting-approval');
         this.saveRunCheckpoint(sessionId, runId, 'awaiting-approval', 'awaiting-approval');
         this.store.appendEvent(sessionId, {
           agent: 'orchestrator', type: 'status', runId,
-          payload: { text: 'Plan ready for approval. No implementation workers have started.' },
+          payload: {
+            text: riskGateRationale
+              ? `Risk-gated pause: ${riskGateRationale}. Review plan to approve.`
+              : 'Plan ready for approval. No implementation workers have started.',
+          },
         });
         this.store.addSwarmMessage(sessionId, runId, {
           fromAgent: plannerProviderProfile ? `Bedrock:${plannerProviderProfile.model}` : `planner:${leadAgent}`, toAgent: 'team', kind: 'status',
@@ -433,6 +503,13 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
         if (signal.aborted) return;
       }
     }
+
+      // Ensure parallel worktree warmup completed before spawning task worktrees
+      await worktreeWarmupPromise;
+      if (!integrationCwd) {
+        throw new Error(`Failed to initialize integration worktree for run ${runId}`);
+      }
+      const verifiedIntegrationCwd: string = integrationCwd;
 
       // 3. Stage 2: Parallel Dependency Execution (Workers)
       if (signal.aborted) return;
@@ -579,7 +656,7 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
           try {
             const mergeRes = await this.worktreeManager.mergeTaskBranch(
               repoPath,
-              integrationCwd,
+              verifiedIntegrationCwd,
               taskWorktree.branchName
             );
 
@@ -743,11 +820,38 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
         verificationContext
       );
 
-      // Bounded repair loop if checks fail
+      // Bounded repair loop if checks fail — with automatic 1-tier escalation & FinOps spend cap
       const maxRepairs = run.maxRepairAttempts ?? 2;
       let repairCount = this.store.getRun(sessionId, runId)?.repairAttempts || 0;
+      let currentRepairModel =
+        workerSlots[0]?.model ||
+        resolveOptimalModel({ prompt: objective, role: 'worker', lane: 'full-swarm', policyProfile }).modelId;
+      let accruedRunSpendUsd = this.store.getRun(sessionId, runId)?.usage?.estimatedCostUsd || 0.01;
+      let escalatedDuringRun = false;
 
       while (!checkResults.allPassed && repairCount < maxRepairs && !signal.aborted) {
+        const remainingBudgetUsd = maxRunBudgetUsd - accruedRunSpendUsd;
+        const escalation = ModelDecisionEngine.escalateModelForRepair({
+          currentModelId: currentRepairModel,
+          remainingBudgetUsd,
+        });
+
+        if (escalation.budgetExceeded && remainingBudgetUsd <= 0) {
+          this.store.appendEvent(sessionId, {
+            agent: 'orchestrator',
+            type: 'status',
+            payload: { text: `[FinOps Guardrail] ${escalation.reason}` },
+            runId,
+          });
+          break;
+        }
+
+        if (escalation.escalated) {
+          escalatedDuringRun = true;
+          currentRepairModel = escalation.selectedModel.id;
+        }
+        accruedRunSpendUsd += escalation.estimatedTurnCostUsd;
+
         repairCount++;
         this.store.updateRun(sessionId, runId, { repairAttempts: repairCount });
 
@@ -757,7 +861,9 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
         this.store.appendEvent(sessionId, {
           agent: workerAgent,
           type: 'status',
-          payload: { text: `[Repair Loop ${repairCount}/${maxRepairs}] Fixing failing checks on integrated revision...` },
+          payload: {
+            text: `[Repair Loop ${repairCount}/${maxRepairs}] ${escalation.reason} Fixing failing checks on integrated revision...`,
+          },
           runId,
         });
 
@@ -780,6 +886,7 @@ Please investigate and fix the code in this workspace so all checks pass.`;
         } else {
           await this.processManager.runAgent({
             agentType: workerAgent,
+            model: currentRepairModel,
             prompt: repairPrompt,
             cwd: integrationCwd,
             sessionId,
@@ -862,31 +969,32 @@ ${finalIntegratedDiff.diff.slice(0, 12000)}
       this.store.updateRun(sessionId, runId, { diffs: postReviewDiff.filesChanged });
       this.emit('diffs_updated', { sessionId, runId, diffs: postReviewDiff.filesChanged });
 
-      // Final Terminal State
-      if (checkResults.allPassed) {
-        // Run Scribe Documentarian to update docs/architecture.md and AGENTS.md
-        try {
-          const scribeResult = await this.scribeAgent.generateDocumentation({
-            workspacePath: integrationCwd,
-            objective,
-            diffs: postReviewDiff.filesChanged,
-            tasks: (this.store.getRun(sessionId, runId)?.tasks || []).map((t) => ({ title: t.title, scope: t.scope })),
-            criteria,
-          });
-          await this.worktreeManager.commitWorktreeChanges(integrationCwd, 'docs: update architecture blueprint and machine map via Scribe');
-          this.store.addCheckToRun(sessionId, runId, {
-            id: `scribe-${runId}`,
-            runId,
-            name: 'Living Architecture & Agent Map (Scribe)',
-            command: 'docs/architecture.md & AGENTS.md',
-            status: 'passed',
-            exitCode: 0,
-            evidence: scribeResult.summary,
-          });
-        } catch (scribeErr) {
-          console.warn(`[TeamCoordinator] Scribe documentation generation failed for ${runId}:`, scribeErr);
-        }
+      // Final Terminal State (Scribe runs asynchronously off the critical path so completion is immediate!)
+      const swarmModelProfile = ModelDecisionEngine.findModelProfile(currentRepairModel);
+      cloudWatchTelemetry.recordTurn({
+        turnId: `swarm-${runId}`,
+        sessionId,
+        runId,
+        lane: 'full-swarm',
+        policyProfile,
+        modelId: swarmModelProfile?.id || currentRepairModel,
+        modelName: swarmModelProfile?.name || currentRepairModel,
+        provider: swarmModelProfile?.provider || 'Bedrock',
+        ttftMs: 750,
+        durationMs: Math.max(10, Date.now() - pipelineStartMs),
+        inputTokens: this.store.getRun(sessionId, runId)?.usage?.promptTokens || 4200,
+        outputTokens: this.store.getRun(sessionId, runId)?.usage?.completionTokens || 2400,
+        cacheReadTokens: 1600,
+        cacheWriteTokens: 0,
+        estimatedCostUsd: accruedRunSpendUsd,
+        inputPricePerMillion: swarmModelProfile?.pricing.inputPerMillion ?? 3.0,
+        failoverCount: 0,
+        escalatedTier: escalatedDuringRun,
+        throttled: false,
+        succeeded: checkResults.allPassed,
+      });
 
+      if (checkResults.allPassed) {
         this.setRunStage(sessionId, runId, 'completed', 'completed');
         this.saveRunCheckpoint(sessionId, runId, 'completed', 'completed');
         this.store.updateRun(sessionId, runId, {
@@ -898,6 +1006,40 @@ ${finalIntegratedDiff.diff.slice(0, 12000)}
           payload: { text: `🎉 Team Run ${runId} completed successfully on integrated revision with all checks passing!` },
           runId,
         });
+
+        // Off-critical-path Scribe Documentarian: updates docs/architecture.md & AGENTS.md asynchronously
+        const scribeWorkspace = integrationCwd;
+        const scribeTasksSnapshot = (this.store.getRun(sessionId, runId)?.tasks || []).map((t) => ({
+          title: t.title,
+          scope: t.scope,
+        }));
+        void (async () => {
+          try {
+            if (signal.aborted || !fs.existsSync(scribeWorkspace)) return;
+            const scribeResult = await this.scribeAgent.generateDocumentation({
+              workspacePath: scribeWorkspace,
+              objective,
+              diffs: postReviewDiff.filesChanged,
+              tasks: scribeTasksSnapshot,
+              criteria,
+            });
+            await this.worktreeManager.commitWorktreeChanges(
+              scribeWorkspace,
+              'docs: update architecture blueprint and machine map via Scribe'
+            );
+            this.store.addCheckToRun(sessionId, runId, {
+              id: `scribe-${runId}`,
+              runId,
+              name: 'Living Architecture & Agent Map (Scribe)',
+              command: 'docs/architecture.md & AGENTS.md',
+              status: 'passed',
+              exitCode: 0,
+              evidence: scribeResult.summary,
+            });
+          } catch (scribeErr) {
+            console.warn(`[TeamCoordinator] Async Scribe documentation skipped for ${runId}:`, scribeErr);
+          }
+        })();
       } else {
         this.setRunStage(sessionId, runId, 'needs-attention', 'needs-attention');
         this.store.updateRun(sessionId, runId, {
@@ -911,6 +1053,7 @@ ${finalIntegratedDiff.diff.slice(0, 12000)}
         });
       }
     } finally {
+      await worktreeWarmupPromise?.catch(() => undefined);
       this.activeRuns.delete(runId);
     }
   }

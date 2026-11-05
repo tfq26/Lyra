@@ -208,7 +208,34 @@ flowchart TD
 
 ---
 
-### 7. Lyra Mission Control Web Dashboard ([`src/App.tsx`](file:///Users/taufeeqali/Projects/Lyra/src/App.tsx))
+### 7. 3-Lane Adaptive Execution & Fast Patch Engine
+Rather than subjecting single-line fixes or read-only questions to a full worktree container lifecycle, Lyra employs sub-millisecond intent triage:
+- **Lane 0 (Instant Ask)**: Direct Bedrock `ConverseStreamCommand` with prompt caching for sub-second responses.
+- **Lane 1 (Fast Patch)**: In-memory AST-verified `<lyra_patch>` edits with previewable virtual diffs (`lyra-patch:`) and 1-click `vscode.WorkspaceEdit` application.
+- **Lane 2 (Full Swarm)**: Parallel worktree DAG orchestration with risk-gated plan auto-approval.
+
+---
+
+### 8. Autonomous Night Shift & Proof Sandbox
+- **Unattended 24/7 Self-Healing**: `NightShiftEngine` executes overnight or background issue investigations, compiler error repairs, and automated patch testing.
+- **Containerized Proof Sandbox**: `ProofSandbox` executes verification commands (`tsc`, `npm run build`, `bun test`) in isolated sandboxes and issues deterministic **Proof Certificates** before committing.
+- **AST Invariant Detector**: Suffix matches bare compiler log paths and enforces that model patches never inadvertently drop existing exported types, interfaces, or functions.
+
+---
+
+### 9. Multi-Model Council (Architectural Consensus)
+- **3-Seat Parallel Debate**: Evaluates significant architectural refactorings and migrations by convening three independent model personas (Frontier Architect, Security Auditor, FinOps Specialist) simultaneously.
+- **Dissent Resolution**: Reconciles conflicting proposals into a single verified implementation plan before running tasks.
+
+---
+
+### 10. Lyra Connect: Cross-Device Continuity Protocol
+- **Spotify Connect-Style Casting**: Enables instant, uninterrupted session handoffs across VS Code, Antigravity IDE, Web Portal, and mobile devices.
+- **Sequence-Delta Synchronization (`sinceSeq`)**: Real-time event streaming delivers continuous model outputs, DAG plan checkpoints, and diff states across all paired client surfaces without dropped tokens.
+
+---
+
+### 11. Lyra Mission Control Web Dashboard ([`src/App.tsx`](file:///Users/taufeeqali/Projects/Lyra/src/App.tsx))
 A focused, 2-tab operational visualizer built in React, Vite, and Tailwind CSS:
 1. **Active Swarms & Worktrees**:
    - Real-time stage tracker (Planning, Executing, Reviewing, Verifying, Completed).

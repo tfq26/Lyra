@@ -46,32 +46,29 @@ export class UnifiedStore extends EventEmitter {
   private harnessProfilesPath: string;
   private modelProviderProfilesPath: string;
 
+  private readonly explicitCustomDir: boolean;
+
   constructor(customStorageDir?: string) {
     super();
     const envStorage = process.env.LYRA_STORAGE_PATH;
-    if (customStorageDir) {
-      this.configPath = path.join(customStorageDir, 'config.json');
-      this.storagePath = path.join(customStorageDir, 'chats');
-      this.harnessProfilesPath = path.join(customStorageDir, 'harness-profiles.json');
-      this.modelProviderProfilesPath = path.join(customStorageDir, 'model-provider-profiles.json');
-    } else if (envStorage) {
-      this.configPath = path.join(envStorage, 'config.json');
-      this.storagePath = path.join(envStorage, 'chats');
-      this.harnessProfilesPath = path.join(envStorage, 'harness-profiles.json');
-      this.modelProviderProfilesPath = path.join(envStorage, 'model-provider-profiles.json');
-    } else {
-      const homeDir = os.homedir();
-      const lyraHome = path.join(homeDir, '.lyra');
-      this.configPath = path.join(lyraHome, 'config.json');
-      this.storagePath = path.join(lyraHome, 'chats');
-      this.harnessProfilesPath = path.join(lyraHome, 'harness-profiles.json');
-      this.modelProviderProfilesPath = path.join(lyraHome, 'model-provider-profiles.json');
-    }
+    this.explicitCustomDir = Boolean(customStorageDir || envStorage);
+    const baseDir = customStorageDir || envStorage || path.join(os.homedir(), '.lyra');
+    this.configPath = path.join(baseDir, 'config.json');
+    this.storagePath = path.join(baseDir, 'chats');
+    this.harnessProfilesPath = path.join(baseDir, 'harness-profiles.json');
+    this.modelProviderProfilesPath = path.join(baseDir, 'model-provider-profiles.json');
     this.init();
   }
 
+  private applyBaseDir(baseDir: string) {
+    this.configPath = path.join(baseDir, 'config.json');
+    this.storagePath = path.join(baseDir, 'chats');
+    this.harnessProfilesPath = path.join(baseDir, 'harness-profiles.json');
+    this.modelProviderProfilesPath = path.join(baseDir, 'model-provider-profiles.json');
+  }
+
   public init() {
-    try {
+    const setupStorage = () => {
       const lyraHome = path.dirname(this.configPath);
       if (!fs.existsSync(lyraHome)) {
         fs.mkdirSync(lyraHome, { recursive: true });
@@ -106,7 +103,22 @@ export class UnifiedStore extends EventEmitter {
           activeAgents: ['antigravity', 'claude_code', 'codex'],
         });
       }
-    } catch (e) {
+    };
+
+    try {
+      setupStorage();
+    } catch (e: any) {
+      if (!this.explicitCustomDir && (e?.code === 'EPERM' || e?.code === 'EACCES' || e?.code === 'EROFS')) {
+        try {
+          const fallbackDir = path.join(process.cwd(), 'server', 'data', 'store');
+          this.applyBaseDir(fallbackDir);
+          setupStorage();
+          return;
+        } catch (fallbackErr) {
+          console.error('[UnifiedStore] Workspace fallback initialization error:', fallbackErr);
+          return;
+        }
+      }
       console.error('[UnifiedStore] Initialization error:', e);
     }
   }

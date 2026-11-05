@@ -163,19 +163,78 @@ export class LyraHarnessGateway {
     const session = this.userTokens.get(providedKey);
     if (session && session.expiresAt > Date.now()) return true;
 
+    // Direct token check if bearer key or gateway api key
     const expected = Buffer.from(this.apiKey);
     const provided = Buffer.from(providedKey);
-    if (expected.length !== provided.length) return false;
-    return crypto.timingSafeEqual(expected, provided);
+    if (expected.length === provided.length && crypto.timingSafeEqual(expected, provided)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
    * Authenticate a user by email and password/PAT, issuing a persistent session token.
+   * Seamlessly checks both Better Auth and Gateway token stores.
    */
+  public async authenticateUserAsync(
+    email: string,
+    passwordOrToken: string,
+    betterAuthRuntime?: any
+  ): Promise<{ success: boolean; token?: string; user?: { email: string }; error?: string }> {
+    const defaultPassword = process.env.LYRA_ADMIN_PASSWORD || 'lyra-admin-password';
+    const isTokenMatch = passwordOrToken === this.apiKey;
+    const isPasswordMatch = passwordOrToken === defaultPassword;
+
+    // Check Better Auth if available
+    if (betterAuthRuntime && !isTokenMatch && !isPasswordMatch) {
+      try {
+        const res = await betterAuthRuntime.auth.api.signInEmail({
+          body: { email: email.trim(), password: passwordOrToken }
+        });
+        if (res && res.token) {
+          const userObj = { email: res.user?.email || email.trim() };
+          this.userTokens.set(res.token, {
+            email: userObj.email,
+            issuedAt: Date.now(),
+            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+          });
+          return { success: true, token: res.token, user: userObj };
+        }
+      } catch (authErr: any) {
+        // Fall through to standard token check if not matching Better Auth
+      }
+    }
+
+    if (!isTokenMatch && !isPasswordMatch) {
+      // Check if provided token is an existing Better Auth or gateway session token
+      const existing = this.userTokens.get(passwordOrToken);
+      if (existing && existing.expiresAt > Date.now()) {
+        return { success: true, token: passwordOrToken, user: { email: existing.email } };
+      }
+      return { success: false, error: 'Invalid credentials. Please verify your password or API token.' };
+    }
+
+    const token = `lyra-pat-${crypto.randomBytes(24).toString('hex')}`;
+    const user = { email: email.trim().toLowerCase() || 'developer@lyra.local' };
+    this.userTokens.set(token, {
+      email: user.email,
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    });
+
+    return { success: true, token, user };
+  }
+
   public authenticateUser(email: string, passwordOrToken: string): { success: boolean; token?: string; user?: { email: string }; error?: string } {
     const defaultPassword = process.env.LYRA_ADMIN_PASSWORD || 'lyra-admin-password';
     const isTokenMatch = passwordOrToken === this.apiKey;
     const isPasswordMatch = passwordOrToken === defaultPassword;
+
+    const existing = this.userTokens.get(passwordOrToken);
+    if (existing && existing.expiresAt > Date.now()) {
+      return { success: true, token: passwordOrToken, user: { email: existing.email } };
+    }
 
     if (!isTokenMatch && !isPasswordMatch) {
       return { success: false, error: 'Invalid credentials. Please verify your password or API token.' };
@@ -217,7 +276,11 @@ export class LyraHarnessGateway {
   public async dispatchTask(params: {
     objective: string;
     workspacePath: string;
+    sessionId?: string;
     model?: string;
+    policyProfile?: import('./cloudwatchEmf').PolicyProfile;
+    approvalPolicy?: import('./teamCoordinator').PlanApprovalPolicy;
+    maxRunBudgetUsd?: number;
     teamConfig?: { lead?: string; workers?: string[]; reviewer?: string; concurrencyLimit?: number };
     metadata?: Record<string, any>;
   }): Promise<{ sessionId: string; runId: string; status: string }> {
@@ -238,7 +301,7 @@ export class LyraHarnessGateway {
     const safeWorkers = (Array.isArray(rawWorkers) ? rawWorkers : [rawWorkers]).slice(0, 4);
     const safeConcurrency = Math.min(Math.max(params.teamConfig?.concurrencyLimit || 4, 1), 4);
 
-    const sessionId = `session-harness-${Date.now()}`;
+    const sessionId = params.sessionId || `session-harness-${Date.now()}`;
     const runId = `run-harness-${Date.now()}`;
 
     // Resolve models: Harness-specified override vs. Lyra Autonomous Model Routing
@@ -264,11 +327,13 @@ export class LyraHarnessGateway {
     const plannerDecision = resolveOptimalModel({ prompt: params.objective, role: 'planner' });
     const reviewerDecision = resolveOptimalModel({ prompt: params.objective, role: 'reviewer' });
 
-    this.store.createSession({
-      id: sessionId,
-      title: `Harness Dispatch: ${params.objective.slice(0, 50)}`,
-      workspacePath: params.workspacePath,
-    });
+    if (!this.store.getSession(sessionId)) {
+      this.store.createSession({
+        id: sessionId,
+        title: `Harness Dispatch: ${params.objective.slice(0, 50)}`,
+        workspacePath: params.workspacePath,
+      });
+    }
 
     this.store.createRun({
       id: runId,
@@ -304,15 +369,21 @@ export class LyraHarnessGateway {
         concurrencyLimit: safeConcurrency,
       };
 
-      this.coordinator.startTeamRun({
-        sessionId,
-        runId,
-        objective: params.objective,
-        workspacePath: params.workspacePath,
-        teamConfig,
-        concurrencyLimit: safeConcurrency,
-        autoApprovePlan: true,
-      });
+      this.coordinator
+        .startTeamRun({
+          sessionId,
+          runId,
+          objective: params.objective,
+          workspacePath: params.workspacePath,
+          teamConfig,
+          concurrencyLimit: safeConcurrency,
+          approvalPolicy: params.approvalPolicy || 'risk-gated',
+          policyProfile: params.policyProfile || 'balanced',
+          maxRunBudgetUsd: params.maxRunBudgetUsd ?? 1.5,
+        })
+        .catch((err) => {
+          console.warn(`[Gateway] Background swarm launch warning for ${runId}:`, err?.message || err);
+        });
     }
 
     this.notifyRunSubscribers(runId, {

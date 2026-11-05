@@ -22,14 +22,75 @@ import { getBetterAuthRuntime, getBetterAuthSession, initializeBetterAuth } from
 import { LyraHarnessGateway } from './gateway';
 import { GitHubWebhookHandler } from './githubWebhookHandler';
 import { BedrockModelCatalog } from './bedrockModelCatalog';
+import { BEDROCK_CATALOG } from './modelDecisionEngine';
+import { cloudWatchTelemetry } from './cloudwatchEmf';
+import { sqsTaskQueue } from './sqsTaskQueue';
+import { AHPServer } from './ahpProtocol';
+import { OpenAiCompatBridge } from './openaiCompatBridge';
+import { modelCouncil } from './modelCouncil';
+import { triggerEngine } from './nightShift/triggerEngine';
+import { nightShiftRunner } from './nightShift/nightShiftRunner';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 
 const PORT = 3001;
 
+function loadEnvFile(filePath: string) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, 'utf8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
+    if (!process.env[key]) {
+      process.env[key] = val;
+    }
+  }
+}
+
+loadEnvFile(path.join(process.cwd(), '.env.local'));
+loadEnvFile(path.join(process.cwd(), '.env'));
+
+/**
+ * Automatically hydrates `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`
+ * from the active `aws login` CLI session (`aws configure export-credentials --format process`)
+ * when not already set in environment variables.
+ */
+function hydrateAwsLoginCredentials() {
+  if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) return;
+  try {
+    const raw = execFileSync('aws', ['configure', 'export-credentials', '--format', 'process'], {
+      encoding: 'utf8',
+      timeout: 4000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parsed = JSON.parse(raw);
+    if (parsed.AccessKeyId && parsed.SecretAccessKey) {
+      process.env.AWS_ACCESS_KEY_ID = parsed.AccessKeyId;
+      process.env.AWS_SECRET_ACCESS_KEY = parsed.SecretAccessKey;
+      if (parsed.SessionToken) {
+        process.env.AWS_SESSION_TOKEN = parsed.SessionToken;
+      }
+      if (!process.env.AWS_REGION) {
+        process.env.AWS_REGION = 'us-east-1';
+      }
+      console.log('[Lyra AWS] Hydrated live AWS Bedrock credentials from `aws login` session.');
+    }
+  } catch {
+    // Non-fatal if aws cli is not logged in
+  }
+}
+
+hydrateAwsLoginCredentials();
+setInterval(hydrateAwsLoginCredentials, 10 * 60 * 1000).unref();
+
 const store = new UnifiedStore();
 const previewManager = new PreviewManager();
 const worktreeManager = new WorktreeManager();
+const ahpServer = new AHPServer(store);
 let idleManager: IdleManager;
 
 const registeredNodes = new Map<string, RunnerNode>([
@@ -72,6 +133,8 @@ const runnerSockets = new Map<string, WebSocket>();
 const legacyAuthToken = process.env.LYRA_AUTH_TOKEN;
 const runnerToken = process.env.LYRA_RUNNER_TOKEN || process.env.LYRA_AUTH_TOKEN;
 const harnessGateway = new LyraHarnessGateway(store, teamCoordinator);
+ahpServer.attachGateway(harnessGateway);
+const openAiBridge = new OpenAiCompatBridge(ahpServer);
 
 function publicProviderProfile(profile: import('./types').ModelProviderProfile) {
   const { secretRef, externalId: _externalId, ...safe } = profile;
@@ -119,15 +182,24 @@ const server = http.createServer(async (req, res) => {
   idleManager?.recordActivity();
   // CORS headers
   const origin = req.headers.origin;
-  if (!origin || origin === `http://localhost:5173` || origin === `http://127.0.0.1:5173`) {
+  const isAllowedOrigin = !origin ||
+    origin === 'http://localhost:5173' ||
+    origin === 'http://127.0.0.1:5173' ||
+    origin === 'http://localhost:3001' ||
+    origin === 'http://127.0.0.1:3001';
+  if (isAllowedOrigin) {
     res.setHeader('Access-Control-Allow-Origin', origin || 'http://localhost:5173');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  if (origin === 'http://localhost:5173' || origin === 'http://127.0.0.1:5173') res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, Cookie, X-Lyra-Api-Key, X-Lyra-Session-Id, X-Lyra-Harness, X-Lyra-Device-Id'
+  );
+  res.setHeader('Access-Control-Expose-Headers', 'Set-Cookie, X-Lyra-Session-Id, X-Lyra-Latest-Seq');
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(200);
+    res.writeHead(204);
     res.end();
     return;
   }
@@ -142,6 +214,85 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname.startsWith('/api/auth/') && getBetterAuthRuntime()) {
     await getBetterAuthRuntime()!.handleNodeRequest(req, res);
+    return;
+  }
+
+  // --- AUTONOMOUS NIGHT SHIFT & PROOF SANDBOX WEBHOOKS & API ---
+  if ((url.pathname === '/api/nightshift/webhook' || url.pathname === '/api/gateway/nightshift/webhook') && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const event =
+          triggerEngine.parseGitHubWebhook(req.headers as any, body, payload) ||
+          triggerEngine.parseSentryWebhook(payload);
+
+        if (!event) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ignored', message: 'No actionable CI/error failure detected in webhook payload' }));
+          return;
+        }
+
+        const workspace = process.cwd();
+        void nightShiftRunner.runInvestigation({
+          event,
+          workspacePath: workspace,
+        }).catch((err) => {
+          console.error('[NightShift] Autonomous investigation failed:', err);
+        });
+
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'investigating',
+          eventId: event.id,
+          source: event.source,
+          repository: event.repository,
+          branch: event.branch,
+        }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Invalid webhook payload' }));
+      }
+    });
+    return;
+  }
+
+  if ((url.pathname === '/api/nightshift/investigate' || url.pathname === '/api/gateway/nightshift/investigate') && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body || '{}');
+        if (!parsed.errorLog || typeof parsed.errorLog !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing errorLog string' }));
+          return;
+        }
+
+        const workspace = parsed.workspacePath || process.cwd();
+        const report = await nightShiftRunner.runInvestigation({
+          event: {
+            id: `api-${Date.now()}`,
+            source: parsed.source || 'manual',
+            repository: parsed.repository || path.basename(workspace),
+            branch: parsed.branch || 'main',
+            commitSha: 'HEAD',
+            errorLog: parsed.errorLog,
+            receivedAt: new Date().toISOString(),
+          },
+          workspacePath: workspace,
+          testCommand: parsed.testCommand,
+          testArgs: parsed.testArgs,
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(report));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Investigation failed' }));
+      }
+    });
     return;
   }
 
@@ -165,11 +316,15 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/gateway/auth/login' && req.method === 'POST') {
       let body = '';
       req.on('data', (c) => (body += c));
-      req.on('end', () => {
+      req.on('end', async () => {
         try {
           const { email, password, token } = JSON.parse(body || '{}');
           const credential = password || token;
-          const authResult = harnessGateway.authenticateUser(email || 'developer@lyra.local', credential || '');
+          const authResult = await harnessGateway.authenticateUserAsync(
+            email || 'developer@lyra.local',
+            credential || '',
+            getBetterAuthRuntime()
+          );
           if (!authResult.success) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: authResult.error }));
@@ -197,10 +352,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 3. Timing-safe Auth Check for protected endpoints
-    if (!harnessGateway.verifyAuth(apiKey)) {
+    // 3. Timing-safe Auth Check OR Better Auth Session Cookie Check for protected endpoints
+    if (!harnessGateway.verifyAuth(apiKey) && !(await isAuthorized(req))) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized. Valid Lyra Gateway API key required.' }));
+      res.end(JSON.stringify({ error: 'Unauthorized. Valid Lyra Gateway API key or Better Auth session required.' }));
       return;
     }
 
@@ -396,8 +551,353 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 13. AHP Protocol: List sessions
+    if ((url.pathname === '/api/gateway/ahp/sessions' || url.pathname === '/api/ahp/sessions') && req.method === 'GET') {
+      const sessions = ahpServer.listSessions();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sessions }));
+      return;
+    }
+
+    // 16b. AHP Protocol: Create new session
+    if ((url.pathname === '/api/gateway/ahp/sessions' || url.pathname === '/api/ahp/sessions') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const session = ahpServer.createSession(parsed);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(session));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // 17. AHP Protocol: Get session transcript & context brief
+    const ahpSessionMatch = url.pathname.match(/^\/api\/(?:gateway\/)?ahp\/sessions\/([^/]+)$/);
+    if (ahpSessionMatch && req.method === 'GET') {
+      const sessId = ahpSessionMatch[1]!;
+      const data = ahpServer.getSession(sessId);
+      if (!data) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `AHP Session ${sessId} not found` }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+      return;
+    }
+
+    // 18. AHP Protocol: JSON-RPC 2.0 endpoint
+    if ((url.pathname === '/api/gateway/ahp/rpc' || url.pathname === '/api/ahp/rpc') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const result = ahpServer.handleRpc(parsed);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }));
+        }
+      });
+      return;
+    }
+
+    // 19. AHP Protocol v1.3: 3-Lane Adaptive Streaming Chat (Instant Ask, Fast Patch, Full Swarm)
+    if ((url.pathname === '/api/gateway/ahp/chat' || url.pathname === '/api/ahp/chat') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', async () => {
+        let parsed: any = {};
+        try {
+          parsed = JSON.parse(body || '{}');
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid JSON payload' }));
+          return;
+        }
+
+        if (!parsed.prompt || typeof parsed.prompt !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing prompt string' }));
+          return;
+        }
+
+        const wantsStream =
+          parsed.stream !== false &&
+          (parsed.stream === true || String(req.headers.accept || '').includes('text/event-stream'));
+
+        if (wantsStream) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            Connection: 'keep-alive',
+          });
+
+          const sendSse = (event: string, data: unknown) => {
+            if (!res.writableEnded) {
+              res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            }
+          };
+
+          try {
+            const finalResult = await ahpServer.executeChatTurn(parsed, {
+              onTriage: (triage, route) => sendSse('triage', { triage, route }),
+              onStatus: (status) => sendSse('status', { status }),
+              onChunk: (chunk) => sendSse('chunk', { chunk }),
+            });
+            sendSse('done', finalResult);
+          } catch (err: any) {
+            sendSse('error', { error: err?.message || 'Execution failed' });
+          } finally {
+            if (!res.writableEnded) res.end();
+          }
+          return;
+        }
+
+        try {
+          const result = await ahpServer.executeChatTurn(parsed);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Execution failed' }));
+        }
+      });
+      return;
+    }
+
+    // 20. AHP Protocol v1.3: 1-Click Escalate Turn to Full Cloud Swarm
+    if ((url.pathname === '/api/gateway/ahp/escalate' || url.pathname === '/api/ahp/escalate') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          if (!parsed.sessionId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing sessionId' }));
+            return;
+          }
+          const result = await ahpServer.escalateToSwarm(parsed);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Escalation failed' }));
+        }
+      });
+      return;
+    }
+
+    // 21. CloudWatch EMF + Pareto Routing + SQS Queue Health Telemetry Snapshot
+    if (url.pathname === '/api/gateway/telemetry' && req.method === 'GET') {
+      const queue = await sqsTaskQueue.getQueueHealth();
+      const telemetry = cloudWatchTelemetry.getSnapshot();
+      const sessions = ahpServer.listSessions();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          telemetry,
+          queue,
+          sessions: sessions.slice(0, 20),
+          hermesMemory: modelCouncil.listMemoryEntries(undefined, 15),
+          infrastructure: {
+            hosted: process.env.LYRA_HOSTED === 'true',
+            region: process.env.AWS_REGION || 'us-east-2',
+            authStore: process.env.LYRA_DATABASE_HOST ? 'aws-rds-postgres' : 'local-sqlite',
+            fargateConfigured: ecsNativeDispatcher.isConfigured(),
+            sqsMode: queue.mode,
+            emfNamespace: telemetry.namespace,
+          },
+        })
+      );
+      return;
+    }
+
+    // 22. Cross-Device Sequence-Delta Cloud Session Sync (for DeepSeek Harness `dsh`, VS Code, CLI)
+    if (url.pathname === '/api/gateway/sessions/sync' && req.method === 'GET') {
+      const sessionId = url.searchParams.get('sessionId') || undefined;
+      const sinceSeq = Number(url.searchParams.get('sinceSeq') || 0);
+      const workspacePath = url.searchParams.get('workspacePath') || undefined;
+      const delta = ahpServer.syncSessionDelta({ sessionId, sinceSeq, workspacePath });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(delta));
+      return;
+    }
+
+    if (url.pathname === '/api/gateway/sessions/sync' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const sessionId = parsed.sessionId || 'session-main';
+          if (!ahpServer.getSession(sessionId)) {
+            ahpServer.createSession({
+              sessionId,
+              title: parsed.title || 'Cloud Synced Session',
+              workspacePath: parsed.workspacePath || process.cwd(),
+            });
+          }
+          if (Array.isArray(parsed.appendMessages)) {
+            for (const m of parsed.appendMessages) {
+              if (m?.content && (m.role === 'user' || m.role === 'assistant')) {
+                ahpServer.appendMessage(sessionId, {
+                  role: m.role,
+                  content: String(m.content),
+                  harness: parsed.harness || 'dsh-sync',
+                  deviceId: parsed.deviceId,
+                });
+              }
+            }
+          }
+          const delta = ahpServer.syncSessionDelta({
+            sessionId,
+            sinceSeq: Number(parsed.sinceSeq || 0),
+            workspacePath: parsed.workspacePath,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(delta));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Invalid sync payload' }));
+        }
+      });
+      return;
+    }
+
+    // 23. Multi-Model Council & Cross-Document RAG Analyzer
+    if (url.pathname === '/api/gateway/council' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          if (!parsed.question || typeof parsed.question !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing question string' }));
+            return;
+          }
+          const sessionId = parsed.sessionId || 'session-main';
+          if (!ahpServer.getSession(sessionId)) {
+            ahpServer.createSession({
+              sessionId,
+              title: `[Council] ${parsed.question.slice(0, 40)}`,
+              workspacePath: parsed.workspacePath || process.cwd(),
+            });
+          }
+          ahpServer.appendMessage(sessionId, {
+            role: 'user',
+            content: parsed.question,
+            harness: parsed.harness || 'council-client',
+            deviceId: parsed.deviceId,
+          });
+          const result = await modelCouncil.analyze({
+            question: parsed.question,
+            workspacePath: parsed.workspacePath,
+            sessionId,
+            mode: parsed.mode,
+            policyProfile: parsed.policyProfile,
+            seatModels: parsed.seatModels,
+            chairModelId: parsed.chairModelId,
+            documentPaths: parsed.documentPaths,
+          });
+          ahpServer.appendMessage(sessionId, {
+            role: 'assistant',
+            content: result.formattedMarkdown,
+            thinking: `Council (${result.mode}) across ${result.seats.length} Bedrock models.`,
+            lane: 'ask',
+            harness: parsed.harness || 'council-client',
+            deviceId: parsed.deviceId,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Council analysis failed' }));
+        }
+      });
+      return;
+    }
+
+    // 24. Gateway-scoped OpenAI-compatible endpoints
+    if (url.pathname === '/api/gateway/v1/models' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(openAiBridge.listModels()));
+      return;
+    }
+
+    if (url.pathname === '/api/gateway/v1/chat/completions' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          await openAiBridge.handleChatCompletions(req, res, parsed);
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Invalid JSON body' } }));
+        }
+      });
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Gateway route not found' }));
+    return;
+  }
+
+  // --- OPENAI-COMPATIBLE HARNESS PROVIDER (`/v1/models` & `/v1/chat/completions`) ---
+  // Used by VS Code GitHub Copilot Chat (`chatLanguageModels.json`), DeepSeek Harness (`dsh`), OpenCode, etc.
+  if (url.pathname === '/v1/models' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(openAiBridge.listModels()));
+    return;
+  }
+
+  if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body || '{}');
+        await openAiBridge.handleChatCompletions(req, res, parsed);
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Invalid JSON body' } }));
+      }
+    });
+    return;
+  }
+
+  // Public Canonical Bedrock Model Catalog & Pareto Profiles (used by Landing Page & VS Code Extension)
+  if (url.pathname === '/api/models/catalog' && req.method === 'GET') {
+    const bedrockCatalog = new BedrockModelCatalog();
+    const active = await bedrockCatalog.getActiveModels();
+    const profiles = await bedrockCatalog.getCrossRegionInferenceProfiles();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        source: active.source,
+        syncedAt: active.syncedAt,
+        paretoCatalog: BEDROCK_CATALOG,
+        activeModels: active.models,
+        crossRegionProfiles: profiles.profiles,
+        policyProfiles: [
+          { id: 'frugal', label: 'Frugal', description: 'Minimizes token spend ($0.06-$0.80/M) while meeting capability threshold.' },
+          { id: 'balanced', label: 'Balanced (Pareto)', description: 'Default multi-objective Pareto optimum across capability, TTFT, and cost.' },
+          { id: 'frontier', label: 'Frontier', description: 'Prioritizes maximum reasoning & coding depth (Sonnet 5, DeepSeek-R1, Opus 5.5).' },
+        ],
+      })
+    );
     return;
   }
 

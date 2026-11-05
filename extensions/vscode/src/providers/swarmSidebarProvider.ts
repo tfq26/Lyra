@@ -36,6 +36,9 @@ export class SwarmSidebarProvider implements vscode.WebviewViewProvider {
         case 'openStudio':
           vscode.commands.executeCommand('lyra.openStudio');
           break;
+        case 'openUniversalChat':
+          vscode.commands.executeCommand('lyra.openUniversalChat');
+          break;
       }
     });
   }
@@ -174,24 +177,25 @@ export class SwarmSidebarProvider implements vscode.WebviewViewProvider {
       <div class="section">
         ${auth.authenticated ? `
           <div class="auth-bar">
-            <span>● Signed In: ${auth.user?.email}</span>
+            <span>Account: ${auth.user?.email}</span>
             <a href="#" style="color: inherit; text-decoration: underline;" onclick="vscode.postMessage({ command: 'signOut' })">Sign Out</a>
           </div>
         ` : `
-          <button onclick="vscode.postMessage({ command: 'signIn' })">🔑 Sign In to Lyra Cloud</button>
-          <div class="meta-text">Connect to your Lyra Hub or Coder server to enable cloud execution.</div>
+          <button onclick="vscode.postMessage({ command: 'signIn' })">Sign In to Account</button>
+          <div class="meta-text">Connect to your Lyra runner to run tasks in the cloud.</div>
         `}
       </div>
 
       <div class="section">
-        <label style="font-weight: 600; font-size: 12px; display: block; margin-bottom: 6px;">Dispatch Cloud Feature:</label>
-        <textarea id="objective" placeholder="e.g. Build spatial audio occlusion system with zero heap allocations in the audio thread..."></textarea>
-        <button onclick="dispatch()">⚡ Dispatch to Cloud Swarm</button>
-        <div class="meta-text">Automated pre-flight Git snapshot will be pushed before execution.</div>
+        <label style="font-weight: 600; font-size: 12px; display: block; margin-bottom: 6px;">Dispatch Task:</label>
+        <textarea id="objective" placeholder="Enter objective or instructions..."></textarea>
+        <button onclick="dispatch()">Dispatch Task</button>
+        <div class="meta-text">Working snapshot is synced automatically before execution.</div>
       </div>
 
       <div class="section" style="border: none;">
-        <button class="secondary" onclick="vscode.postMessage({ command: 'openStudio' })">📊 Open Swarm Studio</button>
+        <button onclick="vscode.postMessage({ command: 'openUniversalChat' })">Open Agent Sessions</button>
+        <button class="secondary" onclick="vscode.postMessage({ command: 'openStudio' })">Open Studio Dashboard</button>
       </div>
 
       <script>
