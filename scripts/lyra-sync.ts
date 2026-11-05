@@ -214,7 +214,50 @@ async function main() {
     return;
   }
 
-  console.log(`Unknown command '${cmd}'. Available commands: list, pull, chat, council`);
+  if (cmd === 'devices' || cmd === 'presence') {
+    const res = await fetch(`${hubUrl}/api/connect/devices`);
+    if (!res.ok) throw new Error(`Failed to list devices (${res.status})`);
+    const data = await res.json() as { devices: any[] };
+    console.log(`\n=== 📡 Lyra Connect: Online Paired Devices (${data.devices.length}) ===`);
+    if (data.devices.length === 0) {
+      console.log('No online devices detected. Start VS Code, Web Portal, or CLI to connect.');
+      return;
+    }
+    for (const d of data.devices) {
+      const typeIcon = d.deviceType === 'mobile' ? '📱' : d.deviceType === 'web' ? '🌐' : d.deviceType === 'cli' ? '⌨️' : '💻';
+      console.log(`${typeIcon} ${d.deviceName} (${d.deviceId})`);
+      console.log(`   Type: ${d.deviceType} | Active Session: ${d.activeSessionId || 'none'} | Workspace: ${d.workspacePath || 'none'}`);
+    }
+    console.log();
+    return;
+  }
+
+  if (cmd === 'cast' || cmd === 'handoff') {
+    const targetDevice = positional[0];
+    const targetSession = positional[1] || sessionFlag;
+    if (!targetDevice) {
+      throw new Error('Usage: bun scripts/lyra-sync.ts cast <targetDeviceId> [sessionId]');
+    }
+    const res = await fetch(`${hubUrl}/api/connect/cast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fromDeviceId: deviceId,
+        targetDeviceId: targetDevice,
+        sessionId: targetSession,
+      }),
+    });
+    const result = await res.json() as any;
+    if (!res.ok || !result.success) {
+      throw new Error(result.error || `Failed to cast session (${res.status})`);
+    }
+    console.log(`\n✨ [Lyra Connect] Session "${targetSession}" successfully cast to device "${targetDevice}"!`);
+    console.log(`   Target Device: ${result.targetDevice.deviceName} (${result.targetDevice.deviceType})`);
+    console.log(`   Context & turn sequence synchronized.\n`);
+    return;
+  }
+
+  console.log(`Unknown command '${cmd}'. Available commands: list, pull, chat, council, devices, cast`);
 }
 
 if (import.meta.main) {

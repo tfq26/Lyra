@@ -30,6 +30,7 @@ import { OpenAiCompatBridge } from './openaiCompatBridge';
 import { modelCouncil } from './modelCouncil';
 import { triggerEngine } from './nightShift/triggerEngine';
 import { nightShiftRunner } from './nightShift/nightShiftRunner';
+import { connectPresenceManager } from './connectPresence';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 
@@ -771,6 +772,74 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ error: err?.message || 'Invalid sync payload' }));
         }
       });
+      return;
+    }
+
+    // 22b. Lyra Connect: Device Presence Heartbeat (Spotify Connect for AI Agents)
+    if (url.pathname === '/api/connect/heartbeat' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const deviceId = parsed.deviceId || (req.headers['x-lyra-device-id'] as string) || 'unknown-device';
+          const dev = connectPresenceManager.recordHeartbeat({
+            deviceId,
+            deviceName: parsed.deviceName,
+            deviceType: parsed.deviceType,
+            workspacePath: parsed.workspacePath,
+            activeSessionId: parsed.activeSessionId,
+            clientIp: req.socket.remoteAddress,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, device: dev }));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Invalid heartbeat payload' }));
+        }
+      });
+      return;
+    }
+
+    // 22c. Lyra Connect: List Online Paired Devices
+    if (url.pathname === '/api/connect/devices' && req.method === 'GET') {
+      const devices = connectPresenceManager.listOnlineDevices();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ devices, count: devices.length, timestamp: new Date().toISOString() }));
+      return;
+    }
+
+    // 22d. Lyra Connect: Session Casting / Device Handoff
+    if (url.pathname === '/api/connect/cast' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          if (!parsed.targetDeviceId || !parsed.sessionId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing targetDeviceId or sessionId' }));
+            return;
+          }
+          const fromDeviceId = parsed.fromDeviceId || (req.headers['x-lyra-device-id'] as string) || 'active-client';
+          const result = connectPresenceManager.castSession({
+            fromDeviceId,
+            targetDeviceId: parsed.targetDeviceId,
+            sessionId: parsed.sessionId,
+          });
+          res.writeHead(result.success ? 200 : 404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Invalid cast payload' }));
+        }
+      });
+      return;
+    }
+
+    // 22e. Lyra Connect: Real-Time Presence & Casting SSE Stream
+    if (url.pathname === '/api/connect/events' && req.method === 'GET') {
+      connectPresenceManager.subscribeSse(req, res);
       return;
     }
 
