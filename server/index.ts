@@ -1262,14 +1262,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   const DEFAULT_BEDROCK_MODELS = [
-    { id: 'us.amazon.nova-micro-v1:0', name: 'Nova Micro', provider: 'Amazon', category: 'Fast & Low Cost' },
-    { id: 'us.amazon.nova-lite-v1:0', name: 'Nova Lite', provider: 'Amazon', category: 'Balanced Multimodal' },
-    { id: 'us.amazon.nova-pro-v1:0', name: 'Nova Pro', provider: 'Amazon', category: 'High Capability' },
-    { id: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0', name: 'Claude 3.7 Sonnet', provider: 'Anthropic', category: 'Flagship Reasoning' },
-    { id: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0', name: 'Claude 3.5 Sonnet v2', provider: 'Anthropic', category: 'Coding & Architecture' },
-    { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', name: 'Claude 3.5 Haiku', provider: 'Anthropic', category: 'Fast & Lightweight' },
-    { id: 'meta.llama3-3-70b-instruct-v1:0', name: 'Llama 3.3 70B', provider: 'Meta', category: 'Open Weights' },
-    { id: 'mistral.mistral-large-2407-v1:0', name: 'Mistral Large 2', provider: 'Mistral AI', category: 'Reasoning & Coding' },
+    { id: 'us.anthropic.claude-opus-5-5', name: 'Claude Opus 5.5', provider: 'Anthropic', category: 'Frontier Architecture & Reasoning' },
+    { id: 'us.anthropic.claude-sonnet-5', name: 'Claude Sonnet 5', provider: 'Anthropic', category: 'Flagship Coding & Craft' },
+    { id: 'qwen.qwen3-coder-480b-a35b-v1:0', name: 'Qwen3 Coder 480B', provider: 'Qwen', category: 'High-Precision Code Synthesis' },
+    { id: 'us.deepseek.r1-v1:0', name: 'DeepSeek-R1', provider: 'DeepSeek', category: 'Algorithmic Proofs & Invariants' },
+    { id: 'us.amazon.nova-pro-v1:0', name: 'Amazon Nova Pro', provider: 'Amazon', category: '300k Multimodal Vision' },
+    { id: 'us.moonshotai.kimi-k3', name: 'Moonshot Kimi K3', provider: 'Moonshot', category: 'Frontier Long-Context RAG' },
+    { id: 'us.meta.llama4-maverick-17b-instruct-v1:0', name: 'Llama 4 Maverick 17B', provider: 'Meta', category: 'High-Speed MoE' },
+    { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', name: 'Claude Haiku 4.5', provider: 'Anthropic', category: 'Sub-400ms Fast Patch' },
   ];
 
   if (url.pathname === '/api/models/bedrock' && req.method === 'GET') {

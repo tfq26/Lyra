@@ -72,9 +72,9 @@ export function resolveOptimalModel(ctx: RoutingContext): ModelRouteDecision {
     ctx.policyProfile ||
     (ctx.costPreference === 'frugal'
       ? 'frugal'
-      : ctx.costPreference === 'performance'
-        ? 'frontier'
-        : 'balanced');
+      : ctx.costPreference === 'balanced'
+        ? 'balanced'
+        : 'frontier');
 
   // If user pinned a legacy model ID (e.g. claude-3-5-sonnet), upgrade cleanly first
   const normalizedPinned =
