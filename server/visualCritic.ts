@@ -32,7 +32,7 @@ export class VisualCritic {
 
   constructor(options?: VisualCriticOptions) {
     this.region = options?.region || process.env.AWS_REGION || 'us-east-1';
-    this.modelId = options?.modelId || 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+    this.modelId = options?.modelId || 'us.anthropic.claude-sonnet-5';
     this.passScoreThreshold = options?.passScoreThreshold ?? 80;
 
     if (options?.bedrockClient) {
@@ -228,10 +228,10 @@ Do not include any markdown fences or preamble. Return raw JSON only.`;
       });
     }
 
-    // Check screenshot file size - empty or blank pages tend to produce tiny PNGs (< 10KB)
+    // Check screenshot file size - completely blank pages produce minimal PNGs (< 2KB)
     for (const sc of screenshots) {
       const bufferLen = Buffer.from(sc.base64, 'base64').length;
-      if (bufferLen < 15_000) {
+      if (bufferLen < 2_000) {
         score -= 30;
         defects.push({
           category: 'scrunched',
