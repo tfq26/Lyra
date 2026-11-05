@@ -274,8 +274,8 @@ export class TeamCoordinator extends EventEmitter {
       abortController.signal,
       false,
       effectiveApprovalPolicy,
-      params.maxRunBudgetUsd ?? 1.5,
-      params.policyProfile ?? 'balanced'
+      params.maxRunBudgetUsd ?? parseFloat(process.env.LYRA_MAX_RUN_BUDGET_USD || '0.75'),
+      params.policyProfile ?? 'frontier'
     ).catch((err) => {
       console.error(`[TeamCoordinator] Pipeline error for run ${runId}:`, err);
       this.store.updateRun(params.sessionId, runId, {
@@ -295,8 +295,8 @@ export class TeamCoordinator extends EventEmitter {
     signal: AbortSignal,
     isResume = false,
     approvalPolicy: PlanApprovalPolicy = 'manual',
-    maxRunBudgetUsd = 1.5,
-    policyProfile: PolicyProfile = 'balanced'
+    maxRunBudgetUsd = parseFloat(process.env.LYRA_MAX_RUN_BUDGET_USD || '0.75'),
+    policyProfile: PolicyProfile = 'frontier'
   ): Promise<void> {
     const pipelineStartMs = Date.now();
     const { sessionId, id: runId, teamConfig, objective } = run;

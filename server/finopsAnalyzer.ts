@@ -143,7 +143,9 @@ export class FinOpsAnalyzer {
     ceilingUsd: number;
     warning?: string;
   } {
-    const ceilingUsd = customCeilingUsd ?? parseFloat(process.env.LYRA_RUN_BUDGET_CEILING_USD || '2.00');
+    const ceilingUsd =
+      customCeilingUsd ??
+      parseFloat(process.env.LYRA_MAX_RUN_BUDGET_USD || process.env.LYRA_RUN_BUDGET_CEILING_USD || '0.75');
     const ratio = ceilingUsd > 0 ? currentCostUsd / ceilingUsd : 0;
 
     if (currentCostUsd >= ceilingUsd) {
@@ -186,7 +188,9 @@ export class FinOpsAnalyzer {
     remainingUsd: number;
     ratio: number;
   } {
-    const ceilingUsd = customCeilingUsd ?? parseFloat(process.env.LYRA_MONTHLY_BUDGET_CEILING_USD || '25.00');
+    const ceilingUsd =
+      customCeilingUsd ??
+      parseFloat(process.env.LYRA_MONTHLY_SPEND_CAP_USD || process.env.LYRA_MONTHLY_BUDGET_CEILING_USD || '25.00');
     const totalSpendUsd = this.monthlyTenantSpends.get(tenantId) || 0;
     const remainingUsd = Math.max(0, parseFloat((ceilingUsd - totalSpendUsd).toFixed(2)));
     const ratio = ceilingUsd > 0 ? parseFloat((totalSpendUsd / ceilingUsd).toFixed(4)) : 0;
