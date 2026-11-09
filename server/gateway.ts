@@ -281,6 +281,7 @@ export class LyraHarnessGateway {
     policyProfile?: import('./cloudwatchEmf').PolicyProfile;
     approvalPolicy?: import('./teamCoordinator').PlanApprovalPolicy;
     maxRunBudgetUsd?: number;
+    maxRepairAttempts?: number;
     teamConfig?: { lead?: string; workers?: string[]; reviewer?: string; concurrencyLimit?: number };
     metadata?: Record<string, any>;
   }): Promise<{ sessionId: string; runId: string; status: string }> {
@@ -360,7 +361,7 @@ export class LyraHarnessGateway {
       checks: [],
       diffs: [],
       repairAttempts: 0,
-      maxRepairAttempts: 2,
+      maxRepairAttempts: params.maxRepairAttempts ?? 4,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       summary: `Harness run initialized for "${params.objective}". Active models: Worker=${workerModelDecision.modelName} (${workerModelDecision.modelId}), Planner=${plannerDecision.modelName}, Reviewer=${reviewerDecision.modelName}. Routing basis: ${workerModelDecision.reason}`,
@@ -388,6 +389,7 @@ export class LyraHarnessGateway {
           approvalPolicy: params.approvalPolicy || 'risk-gated',
           policyProfile: params.policyProfile || 'balanced',
           maxRunBudgetUsd: params.maxRunBudgetUsd ?? 1.5,
+          maxRepairAttempts: params.maxRepairAttempts ?? 4,
         })
         .catch((err) => {
           console.warn(`[Gateway] Background swarm launch warning for ${runId}:`, err?.message || err);

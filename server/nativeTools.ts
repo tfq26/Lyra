@@ -316,58 +316,65 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
           replacement = replacement.replace(/\r\n/g, '\n');
         } else {
           const targetLines = normalizedTarget.split('\n');
-          const contentLines = normalizedContent.split('\n');
-          let matchIndex = -1;
+          const repLines = replacement ? replacement.replace(/\r\n/g, '\n').split('\n') : [];
+          let currentContentLines = normalizedContent.split('\n');
+          let replacedCount = 0;
 
-          // Pass 1: Trailing whitespace tolerance
-          for (let i = 0; i <= contentLines.length - targetLines.length; i++) {
-            let matches = true;
-            for (let j = 0; j < targetLines.length; j++) {
-              if (contentLines[i + j]?.trimEnd() !== targetLines[j]?.trimEnd()) {
-                matches = false;
-                break;
-              }
-            }
-            if (matches) {
-              matchIndex = i;
-              break;
-            }
-          }
-
-          // Pass 2: Full leading & trailing whitespace tolerance (handles indentation differences)
-          if (matchIndex === -1) {
-            for (let i = 0; i <= contentLines.length - targetLines.length; i++) {
+          while (true) {
+            let foundIdx = -1;
+            // Pass 1: Trailing whitespace tolerance
+            for (let i = 0; i <= currentContentLines.length - targetLines.length; i++) {
               let matches = true;
               for (let j = 0; j < targetLines.length; j++) {
-                if (contentLines[i + j]?.trim() !== targetLines[j]?.trim()) {
+                if (currentContentLines[i + j]?.trimEnd() !== targetLines[j]?.trimEnd()) {
                   matches = false;
                   break;
                 }
               }
               if (matches) {
-                matchIndex = i;
+                foundIdx = i;
                 break;
               }
             }
+
+            // Pass 2: Full leading & trailing whitespace tolerance (handles indentation differences)
+            if (foundIdx === -1) {
+              for (let i = 0; i <= currentContentLines.length - targetLines.length; i++) {
+                let matches = true;
+                for (let j = 0; j < targetLines.length; j++) {
+                  if (currentContentLines[i + j]?.trim() !== targetLines[j]?.trim()) {
+                    matches = false;
+                    break;
+                  }
+                }
+                if (matches) {
+                  foundIdx = i;
+                  break;
+                }
+              }
+            }
+
+            if (foundIdx === -1) break;
+
+            const before = currentContentLines.slice(0, foundIdx);
+            const after = currentContentLines.slice(foundIdx + targetLines.length);
+            currentContentLines = [...before, ...repLines, ...after];
+            replacedCount++;
           }
 
-          if (matchIndex !== -1) {
-            const before = contentLines.slice(0, matchIndex);
-            const after = contentLines.slice(matchIndex + targetLines.length);
-            const repLines = replacement ? replacement.replace(/\r\n/g, '\n').split('\n') : [];
-            const resultLines = [...before, ...repLines, ...after];
-            const updated = resultLines.join('\n');
+          if (replacedCount > 0) {
+            const updated = currentContentLines.join('\n');
             fs.writeFileSync(file, updated, 'utf8');
-            return `Successfully edited ${path.relative(root, file)} (matched with whitespace normalization).`;
+            return `Successfully edited ${path.relative(root, file)} (replaced ${replacedCount} matching block(s) with whitespace normalization).`;
           }
 
           throw new Error(`Target text block not found in ${requested}. Tip: Call read_file on "${requested}" first to inspect the current contents and exact indentation.`);
         }
       }
 
-      const updated = content.replace(target, replacement);
+      const updated = content.replaceAll(target, replacement);
       fs.writeFileSync(file, updated, 'utf8');
-      return `Successfully edited ${path.relative(root, file)} (replaced ${target.length} characters with ${replacement.length} characters).`;
+      return `Successfully edited ${path.relative(root, file)} (replaced matching block(s)).`;
     }),
   });
 

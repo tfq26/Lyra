@@ -201,6 +201,7 @@ Options:
     objective,
     model: selectedModelId,
     approvalPolicy: 'auto',
+    maxRepairAttempts: 4,
   });
 
   console.log(`\n🚀 [Run Dispatched]`);

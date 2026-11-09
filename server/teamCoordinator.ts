@@ -271,7 +271,7 @@ export class TeamCoordinator extends EventEmitter {
       diffs: [],
       conflicts: [],
       repairAttempts: 0,
-      maxRepairAttempts: params.maxRepairAttempts ?? 2,
+      maxRepairAttempts: params.maxRepairAttempts ?? 3,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -599,9 +599,11 @@ ${workspaceSnapshot}
 Standards:
 1. Write clean, modular code with TSDoc/JSDoc on all exports.
 2. Add inline comments explaining non-obvious invariants and edge cases.
-3. Work only within your assigned scope. Other agents work in separate worktrees.
+3. Work strictly within your assigned scope. Other agents work in separate worktrees.
 4. When modifying an existing file, call read_file on it first to inspect the exact indentation, methods, and structure before calling edit_file.
-5. PREFER using 'write_files' to batch create or update multiple files in a single fast turn.
+5. NEVER duplicate existing endpoints, methods, or variable declarations. If a file already declares 'app' or maps an endpoint, integrate cleanly without re-declaring variables.
+6. Verify your changes by running 'run_check' with the appropriate build or test command before completing your turn. Do not report success if compiler errors exist.
+7. PREFER using 'write_files' to batch create or update multiple files in a single fast turn.
 At completion, report changes, decisions, blockers, and any handoff in a concise summary. If another agent needs information, include a line in this exact form: [LYRA MESSAGE to=team]message text[/LYRA MESSAGE].`;
 
         let workerResult: { code: number; fullContent?: string; error?: string; cancelled?: boolean };
@@ -903,7 +905,7 @@ ${currentDiff.diff.slice(0, 12000)}
       let reviewVerdict = checkResults.allPassed ? await runReviewCheck(0) : null;
 
       // Bounded self-repair loop: runs if automated checks fail OR reviewer rejected with findings
-      const maxRepairs = run.maxRepairAttempts ?? 2;
+      const maxRepairs = run.maxRepairAttempts ?? 3;
       let repairCount = this.store.getRun(sessionId, runId)?.repairAttempts || 0;
       let currentRepairModel =
         workerSlots[0]?.model ||
@@ -968,8 +970,10 @@ ${criteria.map((c) => `- ${c}`).join('\n')}
 Please investigate and fix the code in this workspace so all checks pass and all reviewer findings are cleanly resolved.
 Instructions:
 1. Always call read_file on any file you need to modify before calling edit_file, so you see the exact current contents and indentation.
-2. To remove unused imports or lines, call edit_file with replacement: "".
-3. Do not introduce uninstalled dependencies.`;
+2. To remove unused imports, duplicate code, or corrupt lines, call edit_file with replacement: "".
+3. If a file was corrupted by repeated duplicate blocks (e.g. duplicate declarations of 'app'), edit or rewrite the file cleanly so it compiles with 0 errors.
+4. Do not introduce uninstalled dependencies.
+5. Verify your fix with run_check before completing your turn.`;
 
         const isNativeRepair = workerAgent === 'orchestrator' || !this.processManager.getCapabilities()[workerAgent]?.installed;
         if (isNativeRepair && this.nativeRuntime) {
