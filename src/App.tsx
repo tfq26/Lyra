@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { MultiAgentBridge } from './components/MultiAgentBridge';
 import { StorageConfigModal } from './components/StorageConfigModal';
+import { FeedbackModal } from './components/FeedbackModal';
 import type { Session, Message, AgentType, AgentBridgeTask, ToolCall, FileDiff, AgentRunOptions } from './types';
 import { sendDesktopNotification } from './lib/platform';
 
@@ -36,6 +37,7 @@ export function App() {
   const [bridgeTasks, setBridgeTasks] = useState<AgentBridgeTask[]>([]);
   const [storagePath, setStoragePath] = useState<string>('~/.lyra/chats');
   const [isStorageModalOpen, setIsStorageModalOpen] = useState(false);
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
 
   const [agentStatuses, setAgentStatuses] = useState<Record<AgentType, 'ready' | 'running' | 'idle' | 'offline'>>({
     antigravity: 'ready',
@@ -758,6 +760,7 @@ export function App() {
               wsRef.current.send(JSON.stringify({ type: 'cancel_run', payload: { runId } }));
             }
           }}
+          onOpenFeedback={() => setIsFeedbackModalOpen(true)}
         />
       )}
 
@@ -785,6 +788,12 @@ export function App() {
         onClose={() => setIsStorageModalOpen(false)}
         currentPath={storagePath}
         onSavePath={handleSaveStoragePath}
+      />
+
+      {/* User Feedback Modal (P0 Priority) */}
+      <FeedbackModal
+        isOpen={isFeedbackModalOpen}
+        onClose={() => setIsFeedbackModalOpen(false)}
       />
     </div>
   );

@@ -33,6 +33,7 @@ import { nightShiftRunner } from './nightShift/nightShiftRunner';
 import { connectPresenceManager } from './connectPresence';
 import { cloudTunnelManager } from './cloudTunnel';
 import { killAllActiveProcesses } from './nativeTools';
+import { userFeedbackService } from './userFeedbackService';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 
@@ -972,7 +973,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname.startsWith('/api/') && url.pathname !== '/api/health' && url.pathname !== '/api/auth/status' && !await isAuthorized(req)) {
+  if (url.pathname.startsWith('/api/') && url.pathname !== '/api/health' && url.pathname !== '/api/auth/status' && url.pathname !== '/api/feedback' && !await isAuthorized(req)) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Authentication required' }));
     return;
@@ -1506,6 +1507,41 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/storage/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ storagePath: store.getStoragePath() }));
+    return;
+  }
+
+  // User Feedback Priority Endpoint (P0 Queue)
+  if (url.pathname === '/api/feedback' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; if (body.length > 64 * 1024) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!payload.description || typeof payload.description !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Description is required' }));
+          return;
+        }
+
+        const ticket = userFeedbackService.submitFeedback({
+          description: payload.description,
+          category: payload.category || 'ui-bug',
+          autoDispatch: payload.autoDispatch ?? true,
+        });
+
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, ticket }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to record user feedback' }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/feedback' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ tickets: userFeedbackService.listFeedback() }));
     return;
   }
 

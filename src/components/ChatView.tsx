@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { Message, AgentType, AgentRunOptions } from '../types';
 import { MessageItem } from './MessageItem';
 import { AgentSelector } from './AgentSelector';
-import { ArrowUp, Loader2, Trash2, Square } from 'lucide-react';
+import { ArrowUp, Loader2, Trash2, Square, Sparkles } from 'lucide-react';
 import { MessageHistorySkeleton } from './Skeletons';
 
 interface ChatViewProps {
@@ -13,6 +13,7 @@ interface ChatViewProps {
   onSendMessage: (content: string, agent: AgentType) => void;
   onDispatchToAgent: (toAgent: AgentType, content: string) => void;
   onClearSession?: () => void;
+  onOpenFeedback?: () => void;
   isStreaming: boolean;
   agentStatuses: Record<AgentType, 'ready' | 'running' | 'idle' | 'offline'>;
   isLoadingMessages?: boolean;
@@ -30,6 +31,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSendMessage,
   onDispatchToAgent,
   onClearSession,
+  onOpenFeedback,
   isStreaming,
   agentStatuses,
   isLoadingMessages = false,
@@ -116,6 +118,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {onOpenFeedback && (
+            <button
+              onClick={onOpenFeedback}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/50 transition-colors text-xs font-medium"
+              title="Request UI change or report issue (P0 Priority)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Feedback</span>
+            </button>
+          )}
+
           {isStreaming && (
             <div className="flex items-center gap-2 text-xs text-neutral-400 mr-2">
               <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-300" />
