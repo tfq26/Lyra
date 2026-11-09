@@ -79,12 +79,22 @@ export interface TelemetrySnapshot {
  * Standard Bedrock Model Pricing Rates (per 1,000,000 tokens)
  */
 const BEDROCK_RATES: Record<string, { name: string; inputPerMillion: number; outputPerMillion: number }> = {
+  'us.amazon.nova-2-lite-v1:0': { name: 'Nova 2 Lite', inputPerMillion: 0.06, outputPerMillion: 0.24 },
+  'amazon.nova-2-lite-v1:0': { name: 'Nova 2 Lite', inputPerMillion: 0.06, outputPerMillion: 0.24 },
+  'us.amazon.nova-lite-v1:0': { name: 'Nova Lite', inputPerMillion: 0.06, outputPerMillion: 0.24 },
+  'amazon.nova-lite-v1:0': { name: 'Nova Lite', inputPerMillion: 0.06, outputPerMillion: 0.24 },
+  'us.amazon.nova-2-pro-v1:0': { name: 'Nova 2 Pro', inputPerMillion: 0.8, outputPerMillion: 3.2 },
+  'amazon.nova-2-pro-v1:0': { name: 'Nova 2 Pro', inputPerMillion: 0.8, outputPerMillion: 3.2 },
+  'us.amazon.nova-pro-v1:0': { name: 'Nova Pro', inputPerMillion: 0.8, outputPerMillion: 3.2 },
+  'amazon.nova-pro-v1:0': { name: 'Nova Pro', inputPerMillion: 0.8, outputPerMillion: 3.2 },
+  'us.amazon.nova-micro-v1:0': { name: 'Nova Micro', inputPerMillion: 0.035, outputPerMillion: 0.14 },
+  'amazon.nova-micro-v1:0': { name: 'Nova Micro', inputPerMillion: 0.035, outputPerMillion: 0.14 },
+  'us.deepseek.r1-v1:0': { name: 'DeepSeek-R1', inputPerMillion: 0.55, outputPerMillion: 2.19 },
+  'deepseek.r1-v1:0': { name: 'DeepSeek-R1', inputPerMillion: 0.55, outputPerMillion: 2.19 },
   'us.anthropic.claude-sonnet-4-6': { name: 'Claude Sonnet 4.6', inputPerMillion: 3.0, outputPerMillion: 15.0 },
   'us.anthropic.claude-opus-4-6-v1': { name: 'Claude Opus 4.6', inputPerMillion: 15.0, outputPerMillion: 75.0 },
   'us.anthropic.claude-haiku-4-5-20251001-v1:0': { name: 'Claude Haiku 4.5', inputPerMillion: 0.8, outputPerMillion: 4.0 },
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': { name: 'Claude Sonnet 4.5', inputPerMillion: 3.0, outputPerMillion: 15.0 },
-  'us.amazon.nova-pro-v1:0': { name: 'Nova Pro', inputPerMillion: 0.8, outputPerMillion: 3.2 },
-  'us.amazon.nova-micro-v1:0': { name: 'Nova Micro', inputPerMillion: 0.035, outputPerMillion: 0.14 },
 };
 
 export class CloudMonitor extends EventEmitter {
@@ -118,6 +128,13 @@ export class CloudMonitor extends EventEmitter {
     existing.outputTokens += outputTokens;
     this.modelInvocations.set(modelId, existing);
     this.emit('invocation_recorded', { modelId, inputTokens, outputTokens });
+  }
+
+  /**
+   * Resolves pricing rates for a given model ID.
+   */
+  public getModelPricing(modelId: string): { name: string; inputPerMillion: number; outputPerMillion: number } {
+    return BEDROCK_RATES[modelId] || { name: modelId, inputPerMillion: 0.06, outputPerMillion: 0.24 };
   }
 
   /**

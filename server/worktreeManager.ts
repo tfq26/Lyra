@@ -401,6 +401,19 @@ export class WorktreeManager {
     const runWorktreePath = path.join(worktreesBaseDir, safeRunId);
     const integrationWorktreePath = path.join(worktreesBaseDir, `${safeRunId}-integration`);
 
+    // Clean any task worktrees first
+    const taskWorktreesDir = path.join(runWorktreePath, 'tasks');
+    if (fs.existsSync(taskWorktreesDir)) {
+      try {
+        const tasks = fs.readdirSync(taskWorktreesDir);
+        for (const t of tasks) {
+          const taskPath = path.join(taskWorktreesDir, t);
+          await this.execGit(['worktree', 'remove', '--force', taskPath], repoPath);
+        }
+      } catch {}
+      fs.rmSync(taskWorktreesDir, { recursive: true, force: true });
+    }
+
     for (const wtPath of [runWorktreePath, integrationWorktreePath]) {
       if (fs.existsSync(wtPath)) {
         await this.execGit(['worktree', 'remove', '--force', wtPath], repoPath);
@@ -410,10 +423,9 @@ export class WorktreeManager {
       }
     }
 
-    // Clean any task worktrees
-    const taskWorktreesDir = path.join(runWorktreePath, 'tasks');
-    if (fs.existsSync(taskWorktreesDir)) {
-      fs.rmSync(taskWorktreesDir, { recursive: true, force: true });
+    if (deleteBranch) {
+      await this.execGit(['branch', '-D', `lyra/run-${safeRunId}`], repoPath);
+      await this.execGit(['branch', '-D', `lyra/run-${safeRunId}-integration`], repoPath);
     }
 
     await this.execGit(['worktree', 'prune'], repoPath);

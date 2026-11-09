@@ -28,6 +28,7 @@ export interface NativeTaskRunResult {
   fullContent: string;
   error?: string;
   cancelled?: boolean;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
 }
 
 interface PendingApproval {
@@ -156,6 +157,7 @@ export class NativeAgentRuntime extends EventEmitter {
       fullContent: res.fullContent,
       error: res.error,
       cancelled: res.cancelled,
+      usage: res.usage,
     };
   }
 

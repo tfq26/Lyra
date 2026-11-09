@@ -13,8 +13,9 @@ import { DecisionEngine } from './decisionEngine';
 import { ModelDecisionEngine } from './modelDecisionEngine';
 import { cloudWatchTelemetry, type PolicyProfile } from './cloudwatchEmf';
 import { resolveOptimalModel } from './modelRouter';
+import { CloudMonitor } from './cloudMonitor';
 import type { NativeAgentRuntime } from './nativeAgentRuntime';
-import type { TeamRun, TaskItem, CheckItem, TeamConfig, AgentType, HarnessId, FileDiff, TeamStage, RunState } from './types';
+import type { TeamRun, TaskItem, CheckItem, TeamConfig, AgentType, HarnessId, FileDiff, TeamStage, RunState, UsageMetrics } from './types';
 
 export type PlanApprovalPolicy = 'manual' | 'risk-gated' | 'auto';
 
@@ -96,6 +97,11 @@ export class TeamCoordinator extends EventEmitter {
 
     if (sessionId) {
       const run = this.store.getRun(sessionId, runId);
+      const session = this.store.getSession(sessionId);
+      const repoPath = session?.meta?.workspacePath || run?.worktreePath;
+      if (repoPath) {
+        void this.worktreeManager.cleanupRunWorktree(repoPath, runId, false).catch(() => undefined);
+      }
       if (run && run.state !== 'completed' && run.state !== 'failed') {
         this.store.updateRun(sessionId, runId, {
           state: 'cancelled',
@@ -433,8 +439,10 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
         planContent = result.text;
         this.store.updateRun(sessionId, runId, {
           planModel: plannerProviderProfile.model,
-          ...(result.usage ? { usage: result.usage } : {}),
         });
+        if (result.usage) {
+          this.recordRunUsage(sessionId, runId, result.usage, plannerProviderProfile.model);
+        }
       } else {
         const planResult = await this.processManager.runAgent({
           agentType: leadAgent,
@@ -448,6 +456,9 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
         });
         if (planResult.code !== 0 || planResult.cancelled) throw new Error(planResult.error || `Lead harness failed with exit code ${planResult.code}`);
         planContent = planResult.fullContent || '';
+        if (planResult.usage) {
+          this.recordRunUsage(sessionId, runId, planResult.usage, leadProfile?.model || teamConfig.plannerModel || plannerRoute.modelId);
+        }
       }
 
 
@@ -606,7 +617,7 @@ Standards:
 7. PREFER using 'write_files' to batch create or update multiple files in a single fast turn.
 At completion, report changes, decisions, blockers, and any handoff in a concise summary. If another agent needs information, include a line in this exact form: [LYRA MESSAGE to=team]message text[/LYRA MESSAGE].`;
 
-        let workerResult: { code: number; fullContent?: string; error?: string; cancelled?: boolean };
+        let workerResult: { code: number; fullContent?: string; error?: string; cancelled?: boolean; usage?: any };
         const isNative = task.assignedAgent === 'orchestrator' || !this.processManager.getCapabilities()[task.assignedAgent]?.installed;
         if (isNative && this.nativeRuntime) {
           const res = await this.nativeRuntime.runTask({
@@ -618,7 +629,7 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
             providerProfileId: task.assignedProfileId,
             signal,
           });
-          workerResult = { code: res.code, fullContent: res.fullContent, error: res.error, cancelled: res.cancelled };
+          workerResult = { code: res.code, fullContent: res.fullContent, error: res.error, cancelled: res.cancelled, usage: res.usage };
         } else {
           workerResult = await this.processManager.runAgent({
             agentType: task.assignedAgent,
@@ -631,6 +642,8 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
             executionMode: 'sandboxed',
           });
         }
+
+        this.recordRunUsage(sessionId, runId, workerResult.usage, task.assignedModel || teamConfig.workerModel);
 
         const attemptEnd = new Date().toISOString();
         let success = workerResult.code === 0 && !workerResult.cancelled && !workerResult.error;
@@ -666,7 +679,7 @@ ${(checkRes.evidence || checkRes.output || '').slice(-2000)}
 Please inspect the affected files, fix the compilation or syntax errors, and ensure the project builds cleanly.
 Do not introduce duplicate definitions or uninstalled dependencies.`;
 
-              let repairRes: { code: number; fullContent?: string; error?: string } = { code: 1 };
+              let repairRes: { code: number; fullContent?: string; error?: string; usage?: any } = { code: 1 };
               if (isNative && this.nativeRuntime) {
                 repairRes = await this.nativeRuntime.runTask({
                   sessionId,
@@ -689,6 +702,8 @@ Do not introduce duplicate definitions or uninstalled dependencies.`;
                   executionMode: 'sandboxed',
                 });
               }
+
+              this.recordRunUsage(sessionId, runId, repairRes.usage, task.assignedModel || teamConfig.workerModel);
 
               const retryRes = await this.verificationRunner.runCheck(buildCheck, taskCwd);
               if (retryRes.status === 'failed') {
@@ -949,6 +964,9 @@ ${currentDiff.diff.slice(0, 12000)}
             processId: `${runId}:reviewer:${attemptNumber}`,
             executionMode: 'safe',
           });
+          if (reviewResult.usage) {
+            this.recordRunUsage(sessionId, runId, reviewResult.usage, reviewerModel);
+          }
           const verdict = parseReviewVerdict(reviewResult.fullContent);
           if (verdict) {
             this.store.addCheckToRun(sessionId, runId, {
@@ -1052,8 +1070,9 @@ Instructions:
 5. Verify your fix with run_check before completing your turn.`;
 
         const isNativeRepair = workerAgent === 'orchestrator' || !this.processManager.getCapabilities()[workerAgent]?.installed;
+        let repairResult: { usage?: any } | undefined;
         if (isNativeRepair && this.nativeRuntime) {
-          await this.nativeRuntime.runTask({
+          repairResult = await this.nativeRuntime.runTask({
             sessionId,
             runId,
             taskId: `repair-${repairCount}`,
@@ -1062,7 +1081,7 @@ Instructions:
             signal,
           });
         } else {
-          await this.processManager.runAgent({
+          repairResult = await this.processManager.runAgent({
             agentType: workerAgent,
             model: currentRepairModel,
             prompt: repairPrompt,
@@ -1073,6 +1092,11 @@ Instructions:
             executionMode: 'sandboxed',
           });
         }
+
+        if (repairResult?.usage) {
+          this.recordRunUsage(sessionId, runId, repairResult.usage, currentRepairModel);
+        }
+        accruedRunSpendUsd = this.store.getRun(sessionId, runId)?.usage?.estimatedCostUsd || accruedRunSpendUsd;
 
         await this.worktreeManager.commitWorktreeChanges(integrationCwd, `Lyra: Integrated repair attempt ${repairCount}`);
 
@@ -1192,7 +1216,51 @@ Instructions:
     } finally {
       await worktreeWarmupPromise?.catch(() => undefined);
       this.activeRuns.delete(runId);
+      if (signal.aborted) {
+        void this.worktreeManager.cleanupRunWorktree(repoPath, runId, false).catch(() => undefined);
+      }
     }
+  }
+
+  private recordRunUsage(
+    sessionId: string,
+    runId: string,
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number },
+    modelId?: string
+  ): void {
+    if (!usage || (!usage.promptTokens && !usage.completionTokens && !usage.totalTokens)) return;
+    const currentRun = this.store.getRun(sessionId, runId);
+    if (!currentRun) return;
+
+    const prior = currentRun.usage || { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+    const promptTokens = (prior.promptTokens || 0) + (usage.promptTokens || 0);
+    const completionTokens = (prior.completionTokens || 0) + (usage.completionTokens || 0);
+    const totalTokens = (prior.totalTokens || 0) + (usage.totalTokens || (usage.promptTokens || 0) + (usage.completionTokens || 0));
+
+    const rates = CloudMonitor.getInstance().getModelPricing(modelId || currentRun.teamConfig?.workerModel || 'us.amazon.nova-2-lite-v1:0');
+    const inCost = ((usage.promptTokens || 0) / 1_000_000) * rates.inputPerMillion;
+    const outCost = ((usage.completionTokens || 0) / 1_000_000) * rates.outputPerMillion;
+    const incrementalCost = inCost + outCost;
+    const estimatedCostUsd = Number(((prior.estimatedCostUsd || 0) + incrementalCost).toFixed(5));
+
+    const updatedUsage: UsageMetrics = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      estimatedCostUsd,
+    };
+
+    this.store.updateRun(sessionId, runId, { usage: updatedUsage });
+    this.emit('run_updated', this.store.getRun(sessionId, runId));
+
+    this.store.appendEvent(sessionId, {
+      agent: 'orchestrator',
+      type: 'status',
+      payload: {
+        text: `💰 Live Spend: ${totalTokens.toLocaleString()} tokens ($${estimatedCostUsd.toFixed(4)} USD) | +${((usage.promptTokens || 0) + (usage.completionTokens || 0)).toLocaleString()} tok on ${rates.name || modelId || 'model'}`,
+      },
+      runId,
+    });
   }
 
   private setRunStage(sessionId: string, runId: string, stage: TeamStage, state: RunState) {
@@ -1203,6 +1271,22 @@ Instructions:
   }
 
   private getWorkspaceSnapshot(dir: string, maxFiles = 35): string {
+    const IGNORED_SNAPSHOT_DIRS = new Set([
+      '.git',
+      'node_modules',
+      '.lyra',
+      'dist',
+      'build',
+      'bin',
+      'obj',
+      'target',
+      '.next',
+      '.turbo',
+      'coverage',
+      '.cache',
+      '.vscode',
+      '.idea',
+    ]);
     try {
       const entries: string[] = [];
       const scan = (current: string, prefix = '') => {
@@ -1211,7 +1295,7 @@ Instructions:
         const items = fs.readdirSync(current, { withFileTypes: true });
         for (const item of items) {
           if (entries.length >= maxFiles) return;
-          if (item.name === '.git' || item.name === 'node_modules' || item.name === '.lyra' || item.name === 'dist') continue;
+          if (IGNORED_SNAPSHOT_DIRS.has(item.name)) continue;
           const rel = prefix ? path.join(prefix, item.name) : item.name;
           entries.push(item.isDirectory() ? `${rel}/` : rel);
           if (item.isDirectory() && prefix.split(path.sep).length < 3) {
@@ -1232,7 +1316,14 @@ Instructions:
       const fileMatches = textToScan.match(/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g) || [];
       const uniqueFiles = Array.from(new Set(fileMatches)).filter((f) => {
         const lower = f.toLowerCase();
-        return !lower.startsWith('http') && !lower.includes('.git') && !lower.includes('node_modules');
+        return !lower.startsWith('http') &&
+               !lower.includes('.git') &&
+               !lower.includes('node_modules') &&
+               !lower.includes('/bin/') && !lower.startsWith('bin/') &&
+               !lower.includes('/obj/') && !lower.startsWith('obj/') &&
+               !lower.includes('/target/') && !lower.startsWith('target/') &&
+               !lower.includes('/dist/') && !lower.startsWith('dist/') &&
+               !lower.includes('/build/') && !lower.startsWith('build/');
       });
 
       const preloaded: string[] = [];
