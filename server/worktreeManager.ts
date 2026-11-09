@@ -349,6 +349,10 @@ export class WorktreeManager {
     if (!isGit) return false;
 
     await this.execGit(['add', '-A'], worktreePath);
+    // Unstage any symlinked dependency folders so they are NEVER committed into git branches
+    await this.execGit(['reset', 'HEAD', '--', 'node_modules', '**/node_modules'], worktreePath);
+    await this.execGit(['rm', '--cached', '-r', '--ignore-unmatch', 'node_modules', '**/node_modules'], worktreePath);
+
     const { code } = await this.execGit(['commit', '-m', message], worktreePath);
     return code === 0;
   }

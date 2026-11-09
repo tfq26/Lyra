@@ -585,7 +585,7 @@ Standards:
 1. Write clean, modular code with TSDoc/JSDoc on all exports.
 2. Add inline comments explaining non-obvious invariants and edge cases.
 3. Work only within your assigned scope. Other agents work in separate worktrees.
-4. If speculatively preloaded files are provided above, do NOT call read_file on them; jump directly to implementing.
+4. When modifying an existing file, call read_file on it first to inspect the exact indentation, methods, and structure before calling edit_file.
 5. PREFER using 'write_files' to batch create or update multiple files in a single fast turn.
 At completion, report changes, decisions, blockers, and any handoff in a concise summary. If another agent needs information, include a line in this exact form: [LYRA MESSAGE to=team]message text[/LYRA MESSAGE].`;
 

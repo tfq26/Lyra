@@ -315,7 +315,32 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
           target = normalizedTarget;
           replacement = replacement.replace(/\r\n/g, '\n');
         } else {
-          throw new Error(`Target text block not found in ${requested}. Verify the exact whitespace and content.`);
+          // Line-by-line whitespace-tolerant matching (ignoring trailing whitespace)
+          const targetLines = normalizedTarget.split('\n');
+          const contentLines = normalizedContent.split('\n');
+          let matchIndex = -1;
+          for (let i = 0; i <= contentLines.length - targetLines.length; i++) {
+            let matches = true;
+            for (let j = 0; j < targetLines.length; j++) {
+              if (contentLines[i + j]?.trimEnd() !== targetLines[j]?.trimEnd()) {
+                matches = false;
+                break;
+              }
+            }
+            if (matches) {
+              matchIndex = i;
+              break;
+            }
+          }
+          if (matchIndex !== -1) {
+            const before = contentLines.slice(0, matchIndex).join('\n');
+            const after = contentLines.slice(matchIndex + targetLines.length).join('\n');
+            const updated = (before ? before + '\n' : '') + replacement + (after ? '\n' + after : '');
+            fs.writeFileSync(file, updated, 'utf8');
+            return `Successfully edited ${path.relative(root, file)} (matched with whitespace normalization).`;
+          }
+
+          throw new Error(`Target text block not found in ${requested}. Tip: Call read_file on "${requested}" first to inspect the current contents and exact indentation.`);
         }
       }
 
@@ -388,8 +413,8 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false },
     callback: wrap('run_check', async ({ command }: { command: string }) => {
       const trimmed = command.trim();
-      const isSafeCheck = /^(bun|npm|pnpm|yarn|npx|dotnet|cargo|pytest|git)\b/i.test(trimmed)
-        || /^(cd\s+[^&;|\n]+\s*&&\s*(bun|npm|pnpm|yarn|npx|dotnet|cargo|pytest|git)\b)/i.test(trimmed);
+      const isSafeCheck = /^(bun|npm|pnpm|yarn|npx|dotnet|cargo|pytest|git|tsc|vitest|jest)\b/i.test(trimmed)
+        || /^(cd\s+[^&;|\n]+\s*&&\s*(bun|npm|pnpm|yarn|npx|dotnet|cargo|pytest|git|tsc|vitest|jest)\b)/i.test(trimmed);
 
       if (!isSafeCheck || commandNeedsApproval(trimmed)) {
         throw new Error('This is not a pre-approved verification command. Use run_command and request approval.');
