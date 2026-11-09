@@ -1,19 +1,14 @@
 import { describe, expect, it, afterEach } from 'bun:test';
-import { WebSocketServer } from 'ws';
+import { EventEmitter } from 'node:events';
 import { RunnerDaemon } from './runnerDaemon';
 
 describe('RunnerDaemon', () => {
-  let wss: WebSocketServer | null = null;
   let runner: RunnerDaemon | null = null;
 
   afterEach(() => {
     if (runner) {
       runner.stop();
       runner = null;
-    }
-    if (wss) {
-      wss.close();
-      wss = null;
     }
   });
 
@@ -36,28 +31,29 @@ describe('RunnerDaemon', () => {
   it('connects to hub, registers node, and sends heartbeat', async () => {
     const receivedMessages: any[] = [];
 
-    // Create a mock hub WebSocket server on dynamic port and wait for it to be listening
-    let port = 0;
-    await new Promise<void>((resolve) => {
-      wss = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => {
-        port = (wss!.address() as any).port;
-        resolve();
-      });
-    });
-
-    wss!.on('connection', (ws) => {
-      ws.on('message', (data) => {
+    class MockWebSocket extends EventEmitter {
+      public readyState = 1; // WebSocket.OPEN
+      constructor() {
+        super();
+        setTimeout(() => this.emit('open'), 5);
+      }
+      send(data: string) {
         try {
-          receivedMessages.push(JSON.parse(data.toString()));
+          receivedMessages.push(JSON.parse(data));
         } catch {}
-      });
-    });
+      }
+      close() {
+        this.readyState = 3;
+        this.emit('close', 1000, 'Normal');
+      }
+    }
 
     runner = new RunnerDaemon({
-      hubUrl: `ws://127.0.0.1:${port}`,
+      hubUrl: 'ws://127.0.0.1:3001',
       nodeName: 'Mock Homelab Runner',
       nodeId: 'node-mock-runner',
       heartbeatIntervalMs: 50,
+      webSocketFactory: () => new MockWebSocket(),
     });
 
     await runner.start();

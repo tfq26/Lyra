@@ -1,4 +1,4 @@
-export type AgentType = 'antigravity' | 'claude_code' | 'codex' | 'opencode' | 'hermes' | 'orchestrator';
+export type AgentType = 'antigravity' | 'claude_code' | 'codex' | 'opencode' | 'hermes' | 'strands' | 'orchestrator';
 export type ExecutionMode = 'safe' | 'sandboxed' | 'unrestricted';
 
 export type RunState =
@@ -58,6 +58,7 @@ export interface TeamConfig {
   nativeProviderProfileId?: string;
   verifier?: AgentType;
   plannerModel?: string;
+  workerModel?: string;
   reviewerModel?: string;
   concurrencyLimit?: number;
 }

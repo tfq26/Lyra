@@ -22,6 +22,7 @@ export interface ModelProfile {
   tier: CapabilityTier; // 1: fast-micro, 2: balanced-coding, 3: frontier-coding, 4: frontier-reasoning
   inferenceProfileId?: string;
   supportsPromptCaching?: boolean;
+  supportsToolStreaming?: boolean;
   pricing: {
     inputPerMillion: number;
     outputPerMillion: number;
@@ -103,6 +104,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 1,
     inferenceProfileId: 'us.amazon.nova-2-lite-v1:0',
     supportsPromptCaching: true,
+    supportsToolStreaming: true,
     pricing: { inputPerMillion: 0.06, outputPerMillion: 0.24 },
     metrics: {
       reasoningScore: 76,
@@ -121,6 +123,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 1,
     inferenceProfileId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
     supportsPromptCaching: true,
+    supportsToolStreaming: true,
     pricing: { inputPerMillion: 0.8, outputPerMillion: 4.0 },
     metrics: {
       reasoningScore: 78,
@@ -139,6 +142,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 1,
     inferenceProfileId: 'us.meta.llama4-scout-17b-instruct-v1:0',
     supportsPromptCaching: false,
+    supportsToolStreaming: false,
     pricing: { inputPerMillion: 0.17, outputPerMillion: 0.66 },
     metrics: {
       reasoningScore: 82,
@@ -157,6 +161,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 2,
     inferenceProfileId: 'us.amazon.nova-pro-v1:0',
     supportsPromptCaching: true,
+    supportsToolStreaming: true,
     pricing: { inputPerMillion: 0.8, outputPerMillion: 3.2 },
     metrics: {
       reasoningScore: 82,
@@ -175,6 +180,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 2,
     inferenceProfileId: 'us.meta.llama4-maverick-17b-instruct-v1:0',
     supportsPromptCaching: false,
+    supportsToolStreaming: false,
     pricing: { inputPerMillion: 0.24, outputPerMillion: 0.97 },
     metrics: {
       reasoningScore: 88,
@@ -193,6 +199,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 2,
     inferenceProfileId: 'us.meta.llama3-3-70b-instruct-v1:0',
     supportsPromptCaching: false,
+    supportsToolStreaming: false,
     pricing: { inputPerMillion: 0.72, outputPerMillion: 0.72 },
     metrics: {
       reasoningScore: 87,
@@ -211,6 +218,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 3,
     inferenceProfileId: 'us.moonshotai.kimi-k3',
     supportsPromptCaching: false,
+    supportsToolStreaming: false,
     pricing: { inputPerMillion: 1.0, outputPerMillion: 3.5 },
     metrics: {
       reasoningScore: 95,
@@ -228,6 +236,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     provider: 'Qwen',
     tier: 3,
     supportsPromptCaching: false,
+    supportsToolStreaming: false,
     pricing: { inputPerMillion: 1.2, outputPerMillion: 4.8 },
     metrics: {
       reasoningScore: 88,
@@ -246,6 +255,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 3,
     inferenceProfileId: 'us.anthropic.claude-sonnet-5',
     supportsPromptCaching: true,
+    supportsToolStreaming: true,
     pricing: { inputPerMillion: 3.0, outputPerMillion: 15.0 },
     metrics: {
       reasoningScore: 94,
@@ -264,6 +274,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 4,
     inferenceProfileId: 'us.deepseek.r1-v1:0',
     supportsPromptCaching: false,
+    supportsToolStreaming: false,
     pricing: { inputPerMillion: 0.55, outputPerMillion: 2.19 },
     metrics: {
       reasoningScore: 97,
@@ -282,6 +293,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     tier: 4,
     inferenceProfileId: 'us.anthropic.claude-opus-5-5',
     supportsPromptCaching: true,
+    supportsToolStreaming: true,
     pricing: { inputPerMillion: 15.0, outputPerMillion: 75.0 },
     metrics: {
       reasoningScore: 98,
@@ -468,8 +480,10 @@ export class ModelDecisionEngine {
       if (dur > maxDur) maxDur = dur;
     }
 
+    const requiresToolStreaming = req.role === 'planner' || req.role === 'worker' || req.role === 'coder';
     for (const model of catalog) {
       if (excluded.has(model.id)) continue;
+      if (requiresToolStreaming && model.supportsToolStreaming === false) continue;
 
       const live = cloudWatchTelemetry.getModelLiveHealth(model.id);
       const effectiveTtft = live && live.invocations > 0 ? live.ewmaTtftMs : model.metrics.avgTtftMs;

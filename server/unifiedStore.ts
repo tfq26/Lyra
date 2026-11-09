@@ -47,6 +47,7 @@ export class UnifiedStore extends EventEmitter {
   private modelProviderProfilesPath: string;
 
   private readonly explicitCustomDir: boolean;
+  private sessionSequences = new Map<string, number>();
 
   constructor(customStorageDir?: string) {
     super();
@@ -540,13 +541,18 @@ export class UnifiedStore extends EventEmitter {
     let lastEvent: UnifiedEvent | null = null;
     try { lastEvent = this.readLastEvent(eventsPath); } catch {}
     if (lastEvent && lastEvent.agent === fullEvent.agent && lastEvent.type === fullEvent.type && JSON.stringify(lastEvent.payload) === JSON.stringify(fullEvent.payload)) return lastEvent;
-    let priorSequence = lastEvent?.sequence;
-    if (lastEvent && priorSequence === undefined) {
-      try { priorSequence = fs.readFileSync(eventsPath, 'utf8').split('\n').filter(Boolean).length; } catch { priorSequence = 0; }
-    } else if (!lastEvent) {
-      try { priorSequence = Number(fs.readFileSync(path.join(sessionDir, 'event-sequence.txt'), 'utf8')) || 0; } catch { priorSequence = 0; }
+
+    let priorSequence = this.sessionSequences.get(sessionId);
+    if (priorSequence === undefined) {
+      if (lastEvent?.sequence !== undefined) {
+        priorSequence = lastEvent.sequence;
+      } else {
+        try { priorSequence = Number(fs.readFileSync(path.join(sessionDir, 'event-sequence.txt'), 'utf8')) || 0; } catch { priorSequence = 0; }
+      }
     }
-    fullEvent.sequence = (priorSequence || 0) + 1;
+    const nextSeq = (priorSequence || 0) + 1;
+    this.sessionSequences.set(sessionId, nextSeq);
+    fullEvent.sequence = nextSeq;
 
     fs.appendFileSync(eventsPath, JSON.stringify(fullEvent) + '\n', 'utf-8');
     this.atomicWrite(path.join(sessionDir, 'event-sequence.txt'), String(fullEvent.sequence));

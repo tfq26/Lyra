@@ -18,6 +18,7 @@ export interface RunnerDaemonOptions {
   reconnectIntervalMs?: number;
   maxDiskQuotaBytes?: number; // e.g. 2GB max
   taskTimeoutMs?: number; // e.g. 10 minutes max per task
+  webSocketFactory?: (url: string, options?: any) => any;
 }
 
 interface ActiveRunnerTask {
@@ -44,9 +45,11 @@ export class RunnerDaemon {
   private readonly store: UnifiedStore;
   private readonly nativeRuntime: NativeAgentRuntime;
   private readonly activeTasks = new Map<string, ActiveRunnerTask>();
+  private readonly wsFactory: (url: string, options?: any) => any;
 
   constructor(options: RunnerDaemonOptions) {
     this.hubUrl = options.hubUrl;
+    this.wsFactory = options.webSocketFactory || ((url, opts) => new WebSocket(url, opts));
     this.token = options.token || process.env.LYRA_RUNNER_TOKEN || process.env.LYRA_AUTH_TOKEN;
     const hostname = os.hostname();
     const defaultId = `node-${hostname.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Math.random().toString(36).slice(2, 6)}`;
@@ -169,16 +172,25 @@ export class RunnerDaemon {
 
       console.log(`[Lyra Runner] Connecting to Hub at ${this.hubUrl} as ${this.node.name} (${this.node.id})...`);
 
-      this.ws = new WebSocket(urlWithNode, { headers });
+      const socket = this.wsFactory(urlWithNode, { headers });
+      this.ws = socket;
 
-      this.ws.on('open', () => {
+      let hasResolved = false;
+      const safeResolve = () => {
+        if (!hasResolved) {
+          hasResolved = true;
+          resolve();
+        }
+      };
+
+      socket.on('open', () => {
         console.log(`[Lyra Runner] Connected to Hub successfully. Registering node...`);
         this.registerNode();
         this.startHeartbeat();
-        resolve();
+        safeResolve();
       });
 
-      this.ws.on('message', async (data) => {
+      socket.on('message', async (data: any) => {
         try {
           const msg = JSON.parse(data.toString());
           await this.handleHubMessage(msg);
@@ -187,8 +199,8 @@ export class RunnerDaemon {
         }
       });
 
-      this.ws.on('close', (code, reason) => {
-        console.warn(`[Lyra Runner] Disconnected from Hub (${code}: ${reason.toString() || 'connection closed'}).`);
+      socket.on('close', (code: any, reason: any) => {
+        console.warn(`[Lyra Runner] Disconnected from Hub (${code}: ${reason?.toString() || 'connection closed'}).`);
         if (this.heartbeatTimer) {
           clearInterval(this.heartbeatTimer);
           this.heartbeatTimer = null;
@@ -196,10 +208,12 @@ export class RunnerDaemon {
         if (this.isRunning) {
           this.scheduleReconnect();
         }
+        safeResolve();
       });
 
-      this.ws.on('error', (err) => {
-        console.error('[Lyra Runner] WebSocket error:', err.message);
+      socket.on('error', (err: any) => {
+        console.error('[Lyra Runner] WebSocket error:', err?.message || err);
+        safeResolve();
       });
     });
   }

@@ -31,6 +31,8 @@ import { modelCouncil } from './modelCouncil';
 import { triggerEngine } from './nightShift/triggerEngine';
 import { nightShiftRunner } from './nightShift/nightShiftRunner';
 import { connectPresenceManager } from './connectPresence';
+import { cloudTunnelManager } from './cloudTunnel';
+import { killAllActiveProcesses } from './nativeTools';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 
@@ -1418,134 +1420,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Automated IAM Role Provisioner
-  if (url.pathname === '/api/aws/provision-iam' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', async () => {
-      try {
-        const payload = JSON.parse(body || '{}');
-        const region = payload.region || 'us-east-1';
-        const roleName = payload.roleName || 'LyraAgentRunnerRole';
 
-        // 1. Check STS caller identity
-        const stsRes = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-          const child = spawn('aws', ['sts', 'get-caller-identity', '--output', 'json'], { env: process.env });
-          let stdout = '';
-          let stderr = '';
-          child.stdout?.on('data', (d) => (stdout += d.toString()));
-          child.stderr?.on('data', (d) => (stderr += d.toString()));
-          child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-          child.on('error', (err) => resolve({ code: 1, stdout: '', stderr: err.message }));
-        });
-
-        if (stsRes.code !== 0) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: 'Not signed into AWS. Please run `aws sso login` or configure credentials in your terminal or browser first.',
-          }));
-          return;
-        }
-
-        const callerData = JSON.parse(stsRes.stdout);
-        const accountId = callerData.Account;
-        const roleArn = `arn:aws:iam::${accountId}:role/${roleName}`;
-
-        const trustPolicy = JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [
-            {
-              Effect: 'Allow',
-              Principal: { AWS: `arn:aws:iam::${accountId}:root` },
-              Action: 'sts:AssumeRole',
-            },
-          ],
-        });
-
-        // 2. Create IAM Role (or ignore if already exists)
-        await new Promise<void>((resolve) => {
-          const child = spawn('aws', ['iam', 'create-role', '--role-name', roleName, '--assume-role-policy-document', trustPolicy], { env: process.env });
-          child.on('close', () => resolve());
-          child.on('error', () => resolve());
-        });
-
-        // 3. Attach AmazonBedrockFullAccess policy
-        await new Promise<void>((resolve) => {
-          const child = spawn('aws', ['iam', 'attach-role-policy', '--role-name', roleName, '--policy-arn', 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'], { env: process.env });
-          child.on('close', () => resolve());
-          child.on('error', () => resolve());
-        });
-
-        // 4. Save Bedrock provider profile in store
-        const profileId = `provider-bedrock-${Date.now()}`;
-        const newProfile = store.saveModelProviderProfile({
-          id: profileId,
-          name: 'Amazon Bedrock (Auto-Provisioned)',
-          provider: 'bedrock',
-          credentialMode: 'byo',
-          model: payload.model || 'us.amazon.nova-micro-v1:0',
-          region,
-          roleArn,
-        });
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          success: true,
-          accountId,
-          roleArn,
-          profile: publicProviderProfile(newProfile),
-        }));
-      } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-      }
-    });
-    return;
-  }
-
-  // CloudFormation Template & Direct Launch
-  if (url.pathname === '/api/aws/download-template' && req.method === 'GET') {
-    const filePath = path.join(process.cwd(), 'infra', 'aws', 'lyra-bedrock-iam.yaml');
-    if (fs.existsSync(filePath)) {
-      res.writeHead(200, {
-        'Content-Type': 'text/yaml',
-        'Content-Disposition': 'attachment; filename="lyra-bedrock-iam.yaml"',
-      });
-      res.end(fs.readFileSync(filePath));
-      return;
-    }
-  }
-
-  if (url.pathname === '/api/aws/cloudformation' && req.method === 'GET') {
-    const region = url.searchParams.get('region') || 'us-east-1';
-    const cfTemplate = `AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Lyra Multi-Agent Bedrock Execution Role'
-Resources:
-  LyraBedrockRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: LyraAgentRunnerRole
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::\${AWS::AccountId}:root'
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
-Outputs:
-  RoleArn:
-    Description: 'The ARN of the Lyra Bedrock Role'
-    Value: !GetAtt LyraBedrockRole.Arn
-`;
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      template: cfTemplate,
-      consoleUrl: `https://console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/create/template`,
-    }));
-    return;
-  }
 
   if (url.pathname === '/api/model-provider-profiles' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2568,6 +2443,14 @@ async function startServer() {
     });
   }
   await eventJournal?.waitForWrites();
+
+  // Non-blocking cleanup of stale temporary worktrees from prior sessions
+  void worktreeManager.pruneStaleWorktrees(process.cwd(), 12).then(({ prunedCount }) => {
+    if (prunedCount > 0) {
+      console.log(`[Lyra Hub] Pruned ${prunedCount} stale git worktree(s) from previous sessions.`);
+    }
+  }).catch(() => {});
+
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Lyra Hub] Server running on http://0.0.0.0:${PORT} (accessible via LAN/Tailscale)`);
     console.log(`[Lyra Hub] Unified Storage initialized at: ${store.getStoragePath()}`);
@@ -2580,8 +2463,18 @@ void startServer().catch((error) => {
   process.exitCode = 1;
 });
 
-for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => {
-  server.close();
-  void eventJournal?.close();
-  void getBetterAuthRuntime()?.close();
-});
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`\n[Lyra Hub] Received ${signal}. Gracefully stopping servers, active tunnels, and child processes...`);
+    server.close();
+    try {
+      cloudTunnelManager.stopAll();
+    } catch {}
+    try {
+      killAllActiveProcesses();
+    } catch {}
+    void eventJournal?.close();
+    void getBetterAuthRuntime()?.close();
+    setTimeout(() => process.exit(0), 100);
+  });
+}

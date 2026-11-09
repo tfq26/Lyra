@@ -1,9 +1,13 @@
 /**
- * Unified Hermes Agent Harness
+ * Unified Strands Agent Harness
  * 
- * A self-contained, zero-installation agent runtime.
- * Neither the user's local machine nor AWS needs any external CLI harnesses installed.
- * Models connect directly to this harness via standard tool calling.
+ * Powered by AWS Strands Agents SDK (@strands-agents/sdk v1.22.0).
+ * Self-contained, cloud-native agent runtime featuring:
+ * - ModelRouter + FallbackStrategy for automatic multi-model Bedrock failover
+ * - Bedrock prompt caching & auto context management (ContextOffloader)
+ * - auxModel offloading for side tasks (summarization, memory)
+ * - Process-isolated session state (preventing cross-agent state collisions)
+ * - Industrial surgical file editing & polyglot verification
  */
 
 import { EventEmitter } from 'events';
@@ -12,16 +16,17 @@ import os from 'os';
 import { Agent, SessionManager } from '@strands-agents/sdk';
 import { BedrockModel } from '@strands-agents/sdk/models/bedrock';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
-import { LocalFileStorage, S3Storage } from '@strands-agents/sdk/storage';
+import { ModelRouter, RoutingCandidate, FallbackStrategy } from '@strands-agents/sdk/models/routing';
+import { LocalFileStorage } from '@strands-agents/sdk/storage';
 import { createNativeTools } from './nativeTools';
-import { resolveOptimalModel, type ModelRouteDecision } from './modelRouter';
+import { resolveOptimalModel } from './modelRouter';
 import { loadProviderCredential } from './providerSecrets';
 import { CloudMonitor } from './cloudMonitor';
 import type { ModelProviderProfile } from './types';
 import type { RunAgentResult } from './processManager';
 import type { UnifiedStore } from './unifiedStore';
 
-export interface HermesRunOptions {
+export interface StrandsRunOptions {
   prompt: string;
   cwd: string;
   sessionId: string;
@@ -35,29 +40,31 @@ export interface HermesRunOptions {
   onProgress?: (message: string) => void;
 }
 
-export class HermesHarness extends EventEmitter {
-  private static instance: HermesHarness;
+export type HermesRunOptions = StrandsRunOptions;
 
-  public static getInstance(): HermesHarness {
-    if (!HermesHarness.instance) {
-      HermesHarness.instance = new HermesHarness();
+export class StrandsHarness extends EventEmitter {
+  private static instance: StrandsHarness;
+
+  public static getInstance(): StrandsHarness {
+    if (!StrandsHarness.instance) {
+      StrandsHarness.instance = new StrandsHarness();
     }
-    return HermesHarness.instance;
+    return StrandsHarness.instance;
   }
 
   /**
-   * Builds the Strands model instance for Hermes using Lyra's auto-routed Bedrock model.
+   * Builds the Strands model instance with automatic multi-model failover.
    */
-  private async createModel(profile?: ModelProviderProfile, customModelId?: string) {
-    const modelId = customModelId || 'us.amazon.nova-pro-v1:0';
-    const region = 'us-east-2';
+  private async createModelRouter(profile?: ModelProviderProfile, customModelId?: string) {
+    const defaultRegion = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
+    const targetModelId = customModelId || 'us.amazon.nova-pro-v1:0';
 
     if (profile?.provider === 'openrouter') {
       const secret = await loadProviderCredential(profile);
       if (!secret.apiKey) throw new Error('OpenRouter API credentials missing.');
       return new OpenAIModel({
         api: 'chat',
-        modelId,
+        modelId: targetModelId,
         apiKey: secret.apiKey,
         maxTokens: 8192,
         temperature: 0.2,
@@ -65,26 +72,64 @@ export class HermesHarness extends EventEmitter {
       });
     }
 
-    // Default to Amazon Bedrock with AWS credentials from environment or IAM task role
-    return new BedrockModel({
-      modelId,
-      region,
+    // Candidate 1: Primary requested or Pareto-optimal model
+    const primaryModel = new BedrockModel({
+      modelId: targetModelId,
+      region: defaultRegion,
       maxTokens: 8192,
       temperature: 0.2,
       cacheConfig: { strategy: 'auto' },
     });
+
+    // Fallback candidates
+    const fallbackCandidates: RoutingCandidate[] = [
+      new RoutingCandidate({ model: primaryModel, name: `primary:${targetModelId}` }),
+    ];
+
+    if (targetModelId !== 'us.amazon.nova-pro-v1:0') {
+      fallbackCandidates.push(
+        new RoutingCandidate({
+          model: new BedrockModel({
+            modelId: 'us.amazon.nova-pro-v1:0',
+            region: defaultRegion,
+            maxTokens: 8192,
+            temperature: 0.2,
+            cacheConfig: { strategy: 'auto' },
+          }),
+          name: 'fallback:nova-pro',
+        })
+      );
+    }
+
+    fallbackCandidates.push(
+      new RoutingCandidate({
+        model: new BedrockModel({
+          modelId: 'us.amazon.nova-lite-v1:0',
+          region: defaultRegion,
+          maxTokens: 8192,
+          temperature: 0.2,
+          cacheConfig: { strategy: 'auto' },
+        }),
+        name: 'fallback:nova-lite',
+      })
+    );
+
+    return new ModelRouter(fallbackCandidates, {
+      strategy: new FallbackStrategy(),
+      maxSwitches: 3,
+    });
   }
 
   /**
-   * Executes an autonomous Hermes agent turn directly against the workspace.
+   * Executes an autonomous Strands agent turn directly against the workspace.
    */
-  public async execute(options: HermesRunOptions): Promise<RunAgentResult> {
+  public async execute(options: StrandsRunOptions): Promise<RunAgentResult> {
     const {
       prompt,
       cwd,
       sessionId,
       runId,
-      processId = `${runId}:hermes:${Date.now()}`,
+      processId = `${runId}:strands:${Date.now()}`,
       model: requestedModel,
       signal,
       store,
@@ -102,9 +147,9 @@ export class HermesHarness extends EventEmitter {
       });
       const targetModelId = requestedModel || optimal.modelId;
 
-      onProgress?.(`[Hermes] Connecting ${optimal.modelName} to unified harness...`);
+      onProgress?.(`[Strands] Connecting ${optimal.modelName} via AWS Bedrock ModelRouter...`);
 
-      // 2. Instantiate native tools for file reading, editing, and execution
+      // 2. Instantiate native tools with surgical edit_file, git_grep fallback, and polyglot run_check
       const tools = createNativeTools(cwd, {
         signal,
         onToolEvent: (toolCall) => {
@@ -119,48 +164,56 @@ export class HermesHarness extends EventEmitter {
         },
       });
 
-      // 3. Create model connection
+      // 3. Create model router with resilient fallbacks
+      const defaultRegion = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
       let model;
       try {
         const profiles = store?.listModelProviderProfiles() || [];
         const profile = profiles.find((p) => p.enabled) || profiles[0];
-        if (!profile) throw new Error('No provider profile');
-        model = await this.createModel(profile, targetModelId);
+        model = await this.createModelRouter(profile, targetModelId);
       } catch (err) {
-        // Fallback to local Bedrock model
-        model = new BedrockModel({
-          modelId: targetModelId,
-          region: 'us-east-2',
-          maxTokens: 8192,
-          temperature: 0.2,
-        });
+        // Fallback to direct Bedrock model router
+        model = await this.createModelRouter(undefined, targetModelId);
       }
 
-      // 4. Hermes System Prompt
-      const systemPrompt = `You are Hermes, Lyra's unified autonomous software engineering agent.
+      // Fast, lightweight auxiliary model for background context management & summarization
+      const auxModel = new BedrockModel({
+        modelId: 'us.amazon.nova-lite-v1:0',
+        region: defaultRegion,
+        maxTokens: 4096,
+        temperature: 0.1,
+      });
+
+      // 4. Autonomous Engineering System Prompt
+      const systemPrompt = `You are Lyra's autonomous software engineering agent powered by AWS Bedrock and Strands SDK.
 You operate directly on the project workspace with tools to read, edit, patch, and verify files.
 Rules:
-1. Always inspect relevant files before modifying them.
-2. Make focused, minimal changes that directly satisfy the objective.
-3. Verify your changes by running project checks or inspecting git diff.
+1. Always inspect relevant files before modifying them (use read_file or search_files).
+2. For code modifications, prefer edit_file to surgically replace target code blocks with exact whitespace matching.
+3. Verify your changes by running project checks (run_check with build/typecheck/test) or inspecting git_diff.
 4. Never claim code runs or tests pass unless you executed them with your tools.
 5. Provide clear, concise summaries of changes made.`;
 
+      // 5. Build agent with process-isolated session storage (eliminates cross-worker session collisions)
       const storagePath = store?.getStoragePath() || path.join(os.homedir(), '.lyra', 'strands');
+      const isolatedSessionKey = `strands-${processId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
       const agent = new Agent({
-        id: `hermes-${processId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
-        name: 'Hermes Agent',
-        description: 'Unified autonomous engineering harness for Lyra',
+        id: `agent-${processId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+        name: 'Strands Engineering Agent',
+        description: 'Cloud-native autonomous engineering harness for Lyra',
         systemPrompt,
         model,
+        auxModel,
         tools,
+        contextManager: 'auto',
         sessionManager: new SessionManager({
-          sessionId: `hermes-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+          sessionId: isolatedSessionKey,
           storage: new LocalFileStorage(storagePath),
         }),
       });
 
-      // 5. Run agent stream
+      // 6. Run agent stream
       const stream = agent.stream(prompt, {
         cancelSignal: signal,
         limits: { turns: 60 },
@@ -224,7 +277,7 @@ Rules:
           message: errorMsg,
         });
       } else {
-        console.warn(`[HermesHarness] Non-fatal turn error for ${processId}:`, errorMsg);
+        console.warn(`[StrandsHarness] Non-fatal turn error for ${processId}:`, errorMsg);
       }
 
       return {
@@ -240,3 +293,6 @@ Rules:
     }
   }
 }
+
+// Backward-compatible alias
+export const HermesHarness = StrandsHarness;

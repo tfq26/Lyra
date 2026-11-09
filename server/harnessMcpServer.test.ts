@@ -27,9 +27,9 @@ describe('Lyra Harness MCP Server', () => {
     }
   });
 
-  it('exposes the 12 standardized MCP harness tools', () => {
+  it('exposes the 15 standardized MCP harness tools', () => {
     const tools = mcpServer.getTools();
-    expect(tools.length).toBe(12);
+    expect(tools.length).toBe(15);
     const names = tools.map((t) => t.name);
     expect(names).toContain('lyra_dispatch_task');
     expect(names).toContain('lyra_get_run_status');
@@ -43,12 +43,20 @@ describe('Lyra Harness MCP Server', () => {
     expect(names).toContain('lyra_run_qa_sandbox');
     expect(names).toContain('lyra_dispatch_and_pr');
     expect(names).toContain('lyra_run_maintenance');
+    expect(names).toContain('lyra_council_analyze');
+    expect(names).toContain('lyra_sync_session');
+    expect(names).toContain('lyra_nightshift_investigate');
   });
 
   it('executes QA sandbox and conflict resolution tools', async () => {
+    const tempWorkspace = path.join(process.cwd(), '.bun-temp', `workspace-mcp-${Date.now()}`);
+    testDirs.push(tempWorkspace);
+    fs.mkdirSync(path.join(tempWorkspace, 'apps/api/src/http'), { recursive: true });
+    fs.writeFileSync(path.join(tempWorkspace, 'apps/api/src/http/app.ts'), '// Initial file');
+
     const dispatch = await mcpServer.executeTool('lyra_dispatch_task', {
       objective: 'Implement OAuth refresh token rotation',
-      workspacePath: '/Users/taufeeqali/Projects/Duit',
+      workspacePath: tempWorkspace,
     });
     const { runId, sessionId } = JSON.parse(dispatch.content[0]!.text);
 

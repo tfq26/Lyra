@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { WorktreeManager, type WorktreeInfo } from '../worktreeManager';
 
 export interface SandboxExecutionReceipt {
-  phase: 'reproduction_red' | 'verification_green';
+  phase: 'reproduction_red' | 'verification_green' | (string & {});
   passed: boolean;
   exitCode: number;
   durationMs: number;
@@ -12,6 +12,8 @@ export interface SandboxExecutionReceipt {
   stdout: string;
   stderr: string;
   command: string;
+  sessionId?: string;
+  args?: string[];
 }
 
 export interface SandboxSession {

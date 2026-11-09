@@ -324,8 +324,12 @@ export class LyraHarnessGateway {
       };
     }
 
-    const plannerDecision = resolveOptimalModel({ prompt: params.objective, role: 'planner' });
-    const reviewerDecision = resolveOptimalModel({ prompt: params.objective, role: 'reviewer' });
+    const plannerDecision = params.model && params.model !== 'auto'
+      ? workerModelDecision
+      : resolveOptimalModel({ prompt: params.objective, role: 'planner' });
+    const reviewerDecision = params.model && params.model !== 'auto'
+      ? workerModelDecision
+      : resolveOptimalModel({ prompt: params.objective, role: 'reviewer' });
 
     if (!this.store.getSession(sessionId)) {
       this.store.createSession({
@@ -347,6 +351,7 @@ export class LyraHarnessGateway {
         workers: safeWorkers as any,
         reviewer: (params.teamConfig?.reviewer as any) || 'hermes',
         plannerModel: plannerDecision.modelId,
+        workerModel: workerModelDecision.modelId,
         reviewerModel: reviewerDecision.modelId,
         concurrencyLimit: safeConcurrency,
       },
@@ -366,6 +371,9 @@ export class LyraHarnessGateway {
         lead: (params.teamConfig?.lead as any) || 'hermes',
         workers: safeWorkers as any,
         reviewer: (params.teamConfig?.reviewer as any) || 'hermes',
+        plannerModel: plannerDecision.modelId,
+        workerModel: workerModelDecision.modelId,
+        reviewerModel: reviewerDecision.modelId,
         concurrencyLimit: safeConcurrency,
       };
 

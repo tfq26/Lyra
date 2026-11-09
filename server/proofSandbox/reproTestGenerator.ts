@@ -6,8 +6,9 @@ import { type StackTraceMapping } from '../repoBrain/invariantDetector';
 export interface ReproTestResult {
   testFilePath: string;
   testCode: string;
-  rationale: string;
+  rationale?: string;
   generatedByModel: string;
+  targetSourceFile?: string;
 }
 
 export class ReproTestGenerator {

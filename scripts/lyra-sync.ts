@@ -64,11 +64,36 @@ function writeLocalCursor(cursor: LocalSessionCursor): void {
   if (!fs.existsSync(syncDir)) {
     fs.mkdirSync(syncDir, { recursive: true });
   }
-  fs.writeFileSync(getCursorPath(cursor.sessionId), JSON.stringify(cursor, null, 2), 'utf8');
+  const finalPath = getCursorPath(cursor.sessionId);
+  const tmpPath = `${finalPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(cursor, null, 2), 'utf8');
+  fs.renameSync(tmpPath, finalPath);
+}
+
+export async function fetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  maxRetries = 3
+): Promise<Response> {
+  let attempt = 0;
+  while (true) {
+    try {
+      const res = await fetch(url, init);
+      if (res.status >= 500 && attempt < maxRetries) {
+        throw new Error(`Server temporarily unavailable (${res.status})`);
+      }
+      return res;
+    } catch (err: any) {
+      attempt++;
+      if (attempt > maxRetries) throw err;
+      const delayMs = Math.min(2000, 100 * Math.pow(2, attempt) + Math.random() * 50);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
 }
 
 async function listCloudSessions(): Promise<void> {
-  const res = await fetch(`${hubUrl}/api/gateway/ahp/sessions`, {
+  const res = await fetchWithRetry(`${hubUrl}/api/gateway/ahp/sessions`, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   if (!res.ok) {
@@ -96,7 +121,7 @@ async function pullSessionDelta(sessionId = 'session-main'): Promise<void> {
     workspacePath: process.cwd(),
   });
 
-  const res = await fetch(`${hubUrl}/api/gateway/sessions/sync?${params.toString()}`, {
+  const res = await fetchWithRetry(`${hubUrl}/api/gateway/sessions/sync?${params.toString()}`, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   if (!res.ok) {
@@ -107,17 +132,26 @@ async function pullSessionDelta(sessionId = 'session-main'): Promise<void> {
   const newMsgs = Array.isArray(delta.deltaMessages) ? delta.deltaMessages : [];
 
   if (newMsgs.length > 0) {
+    const existingSeqs = new Set(cursor.messages.map((m) => m.sequence));
     for (const m of newMsgs) {
-      cursor.messages.push({
-        sequence: m.sequence,
-        role: m.role,
-        content: m.content,
-        harness: m.harness,
-        deviceId: m.deviceId,
-        timestamp: m.timestamp,
-      });
+      if (!existingSeqs.has(m.sequence)) {
+        cursor.messages.push({
+          sequence: m.sequence,
+          role: m.role,
+          content: m.content,
+          harness: m.harness,
+          deviceId: m.deviceId,
+          timestamp: m.timestamp,
+        });
+        existingSeqs.add(m.sequence);
+      }
     }
-    cursor.lastSyncedSeq = delta.latestSeq;
+    cursor.messages.sort((a, b) => a.sequence - b.sequence);
+    cursor.lastSyncedSeq = Math.max(
+      cursor.lastSyncedSeq,
+      delta.latestSeq || 0,
+      ...cursor.messages.map((m) => m.sequence)
+    );
     cursor.updatedAt = new Date().toISOString();
     writeLocalCursor(cursor);
   }
@@ -147,7 +181,7 @@ async function pullSessionDelta(sessionId = 'session-main'): Promise<void> {
 }
 
 async function runSyncedChat(prompt: string, sessionId = 'session-main', model = 'lyra-auto'): Promise<void> {
-  const res = await fetch(`${hubUrl}/v1/chat/completions`, {
+  const res = await fetchWithRetry(`${hubUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -215,7 +249,7 @@ async function main() {
   }
 
   if (cmd === 'devices' || cmd === 'presence') {
-    const res = await fetch(`${hubUrl}/api/connect/devices`);
+    const res = await fetchWithRetry(`${hubUrl}/api/connect/devices`);
     if (!res.ok) throw new Error(`Failed to list devices (${res.status})`);
     const data = await res.json() as { devices: any[] };
     console.log(`\n=== 📡 Lyra Connect: Online Paired Devices (${data.devices.length}) ===`);
@@ -238,7 +272,7 @@ async function main() {
     if (!targetDevice) {
       throw new Error('Usage: bun scripts/lyra-sync.ts cast <targetDeviceId> [sessionId]');
     }
-    const res = await fetch(`${hubUrl}/api/connect/cast`, {
+    const res = await fetchWithRetry(`${hubUrl}/api/connect/cast`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

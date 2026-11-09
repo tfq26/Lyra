@@ -13,7 +13,13 @@ describe('ModelDecisionEngine Multi-Objective Optimization', () => {
     expect(decision.metricsBreakdown.taskComplexity).toBeLessThanOrEqual(50);
     // Should NOT choose expensive frontier models (Opus)
     expect(decision.selectedModel.id).not.toBe('anthropic.claude-opus-5-5');
-    expect(['anthropic.claude-haiku-4-5-20251001-v1:0', 'qwen.qwen3-coder-480b-a35b-v1:0', 'amazon.nova-2-lite-v1:0']).toContain(decision.selectedModel.id);
+    expect([
+      'anthropic.claude-haiku-4-5-20251001-v1:0',
+      'qwen.qwen3-coder-480b-a35b-v1:0',
+      'amazon.nova-2-lite-v1:0',
+      'us.meta.llama4-maverick-17b-instruct-v1:0',
+      'us.meta.llama4-scout-17b-instruct-v1:0',
+    ]).toContain(decision.selectedModel.id);
   });
 
   it('selects high-capability frontier models for security audits and deep architectural tasks', () => {
@@ -24,8 +30,13 @@ describe('ModelDecisionEngine Multi-Objective Optimization', () => {
     });
 
     expect(decision.metricsBreakdown.taskComplexity).toBeGreaterThanOrEqual(85);
-    // Should choose frontier reasoning models (DeepSeek-R1, Sonnet 5, Opus 5.5)
-    expect(['us.deepseek.r1-v1:0', 'anthropic.claude-sonnet-5', 'anthropic.claude-opus-5-5']).toContain(decision.selectedModel.id);
+    // Should choose frontier reasoning models (DeepSeek-R1, Sonnet 5, Opus 5.5, Kimi K3)
+    expect([
+      'us.deepseek.r1-v1:0',
+      'anthropic.claude-sonnet-5',
+      'anthropic.claude-opus-5-5',
+      'us.moonshotai.kimi-k3',
+    ]).toContain(decision.selectedModel.id);
     expect(decision.selectedModel.metrics.reasoningScore).toBeGreaterThanOrEqual(90);
   });
 

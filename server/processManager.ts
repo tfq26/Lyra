@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import type { AgentType, ExecutionMode } from './types';
 import { EventEmitter } from 'events';
-import { HermesHarness } from './hermesHarness';
+import { HermesHarness, StrandsHarness } from './hermesHarness';
 
 export interface RunAgentOptions {
   agentType: AgentType;
@@ -126,6 +126,7 @@ export class ProcessManager extends EventEmitter {
     const isInstalled = (name: string) => Boolean(this.findBinary(name));
     return {
       hermes: { installed: true, options: ['model', 'effort', 'sandbox', 'max-turns'] },
+      strands: { installed: true, options: ['model', 'effort', 'sandbox', 'max-turns'] },
       antigravity: {
         installed: isInstalled('antigravity'),
         options: ['model', 'effort', 'sandbox', 'mode', 'continue', 'conversation', 'add-dir', 'json-schema'],
@@ -145,7 +146,8 @@ export class ProcessManager extends EventEmitter {
   public getReadiness() {
     const isInstalled = (name: string) => Boolean(this.findBinary(name));
     return {
-      hermes: { installed: true, authenticated: true, ready: true, reason: 'Unified Hermes harness ready.' },
+      hermes: { installed: true, authenticated: true, ready: true, reason: 'Unified Strands/Hermes harness ready.' },
+      strands: { installed: true, authenticated: true, ready: true, reason: 'Unified Strands harness ready.' },
       antigravity: { installed: isInstalled('antigravity'), authenticated: 'unknown', ready: isInstalled('antigravity'), reason: isInstalled('antigravity') ? 'Ready' : 'CLI executable not found.' },
       claude_code: { installed: isInstalled('claude_code'), authenticated: 'unknown', ready: isInstalled('claude_code'), reason: isInstalled('claude_code') ? 'Ready' : 'CLI executable not found.' },
       codex: { installed: isInstalled('codex'), authenticated: 'unknown', ready: isInstalled('codex'), reason: isInstalled('codex') ? 'Ready' : 'CLI executable not found.' },
@@ -219,12 +221,12 @@ export class ProcessManager extends EventEmitter {
 
     this.emit('run_started', { sessionId, runId, agentType, executionMode });
 
-    if (agentType === 'hermes') {
+    if (agentType === 'hermes' || agentType === 'strands') {
       const bin = this.findBinary('hermes-agent') || this.findBinary('hermes');
-      if (bin) {
+      if (bin && agentType === 'hermes') {
         return this.runPortableCli(options, executionMode);
       }
-      return HermesHarness.getInstance().execute({
+      return StrandsHarness.getInstance().execute({
         prompt,
         cwd,
         sessionId,
@@ -233,10 +235,10 @@ export class ProcessManager extends EventEmitter {
         model: options.model,
         signal: (options as any).signal,
         onChunk: (delta, full) => {
-          this.emit('content_chunk', { sessionId, runId, processId: options.processId, agentType: 'hermes', delta, fullContent: full });
+          this.emit('content_chunk', { sessionId, runId, processId: options.processId, agentType: options.agentType || 'hermes', delta, fullContent: full });
         },
         onProgress: (message) => {
-          this.emit('thought', { sessionId, runId, agentType: 'hermes', thought: message });
+          this.emit('thought', { sessionId, runId, agentType: options.agentType || 'hermes', thought: message });
         },
       });
     }

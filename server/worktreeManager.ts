@@ -45,6 +45,47 @@ export class WorktreeManager {
     });
   }
 
+  public hydrateWorktreeDependencies(repoPath: string, worktreePath: string): void {
+    if (repoPath === worktreePath) return;
+    try {
+      // 1. Root node_modules symlink
+      const rootModules = path.join(repoPath, 'node_modules');
+      const targetRootModules = path.join(worktreePath, 'node_modules');
+      if (fs.existsSync(rootModules) && !fs.existsSync(targetRootModules)) {
+        try {
+          fs.symlinkSync(rootModules, targetRootModules, 'junction');
+        } catch {}
+      }
+
+      // 2. Discover nested packages up to 3 levels deep (e.g. src/Draco.Web/node_modules)
+      const scanNested = (dir: string, depth = 0) => {
+        if (depth > 2) return;
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'bin' || entry.name === 'obj') continue;
+            if (entry.isDirectory()) {
+              const subDir = path.join(dir, entry.name);
+              const subModules = path.join(subDir, 'node_modules');
+              if (fs.existsSync(subModules)) {
+                const rel = path.relative(repoPath, subDir);
+                const targetSub = path.join(worktreePath, rel);
+                const targetSubModules = path.join(targetSub, 'node_modules');
+                if (fs.existsSync(targetSub) && !fs.existsSync(targetSubModules)) {
+                  try {
+                    fs.symlinkSync(subModules, targetSubModules, 'junction');
+                  } catch {}
+                }
+              }
+              scanNested(subDir, depth + 1);
+            }
+          }
+        } catch {}
+      };
+      scanNested(repoPath);
+    } catch {}
+  }
+
   public async isGitRepo(workspacePath: string): Promise<boolean> {
     try {
       const { code } = await this.execGit(['rev-parse', '--is-inside-work-tree'], workspacePath);
@@ -102,6 +143,8 @@ export class WorktreeManager {
       };
     }
 
+    this.hydrateWorktreeDependencies(repoPath, worktreePath);
+
     return {
       worktreePath,
       branchName,
@@ -157,6 +200,8 @@ export class WorktreeManager {
       };
     }
 
+    this.hydrateWorktreeDependencies(repoPath, worktreePath);
+
     return {
       worktreePath,
       branchName,
@@ -204,6 +249,8 @@ export class WorktreeManager {
         isGit: true,
       };
     }
+
+    this.hydrateWorktreeDependencies(repoPath, worktreePath);
 
     return {
       worktreePath,
@@ -469,5 +516,42 @@ export class WorktreeManager {
 
     await this.execGit(['worktree', 'prune'], repoPath);
     return { success: res.code === 0, error: res.code === 0 ? undefined : res.stderr || res.stdout };
+  }
+
+  /**
+   * Prunes stale or abandoned worktrees older than maxAgeHours (default 12 hours).
+   * Runs `git worktree prune` and removes unreferenced directories.
+   */
+  public async pruneStaleWorktrees(repoPath: string, maxAgeHours = 12): Promise<{ prunedCount: number }> {
+    const isGit = await this.isGitRepo(repoPath);
+    if (!isGit) return { prunedCount: 0 };
+
+    const worktreesBaseDir = path.join(repoPath, '.lyra', 'worktrees');
+    if (!fs.existsSync(worktreesBaseDir)) return { prunedCount: 0 };
+
+    let prunedCount = 0;
+    const cutoffTime = Date.now() - maxAgeHours * 3600 * 1000;
+
+    try {
+      const entries = fs.readdirSync(worktreesBaseDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const entryPath = path.join(worktreesBaseDir, entry.name);
+        try {
+          const stat = fs.statSync(entryPath);
+          if (stat.mtimeMs < cutoffTime) {
+            await this.removeCustomWorktree(repoPath, entryPath, true);
+            prunedCount++;
+          }
+        } catch {
+          // Ignore individual entry removal errors
+        }
+      }
+      await this.execGit(['worktree', 'prune'], repoPath);
+    } catch (err) {
+      console.warn(`[WorktreeManager] Error during stale worktree pruning:`, err);
+    }
+
+    return { prunedCount };
   }
 }

@@ -203,12 +203,19 @@ describe('Headless End-to-End Swarm Assembly Line', () => {
     // Verify all tasks succeeded
     expect(run.tasks.every((t) => t.status === 'succeeded')).toBe(true);
 
+    // Wait briefly for off-critical-path async Scribe documentarian to record its check
+    let scribeCheck = run.checks.find((c) => c.name.includes('Scribe'));
+    const scribeWaitStart = Date.now();
+    while (!scribeCheck && Date.now() - scribeWaitStart < 4000) {
+      await new Promise((r) => setTimeout(r, 50));
+      run = store.getRun(sessionId, runId)!;
+      scribeCheck = run.checks.find((c) => c.name.includes('Scribe'));
+    }
+
     // Verify checks passed (including Database Migration Canary and Scribe)
     expect(run.checks.length).toBeGreaterThanOrEqual(2);
     const canaryCheck = run.checks.find((c) => c.name.includes('Canary') || c.command.includes('canary'));
     expect(canaryCheck?.status).toBe('passed');
-
-    const scribeCheck = run.checks.find((c) => c.name.includes('Scribe'));
     expect(scribeCheck?.status).toBe('passed');
 
     // Step 5: Merge changes into main branch

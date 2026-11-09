@@ -77,6 +77,7 @@ export class NightShiftRunner {
     let publicPreviewUrl: string | undefined;
     let verifyReceipt: SandboxExecutionReceipt = {
       sessionId: runId,
+      phase: 'verification_green',
       command: testCmd,
       args: baseArgs,
       exitCode: 1,
@@ -84,6 +85,7 @@ export class NightShiftRunner {
       stderr: '',
       durationMs: 0,
       passed: false,
+      failingTests: [],
     };
 
     try {
@@ -92,6 +94,7 @@ export class NightShiftRunner {
         reproResult = {
           testFilePath: 'build-check',
           testCode: `${testCmd} ${baseArgs.join(' ')}`,
+          rationale: 'Build oracle verification for compiler and typecheck errors',
           targetSourceFile: traceMapping.parsedError.file || 'tsconfig.json',
           generatedByModel: 'build-oracle',
         };

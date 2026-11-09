@@ -351,7 +351,11 @@ export class TeamCoordinator extends EventEmitter {
       const workerProfiles = (teamConfig.workerProfileIds || []).map((profileId) => profileById.get(profileId)).filter((profile) => profile?.enabled);
       const workerSlots = workerProfiles.length
         ? workerProfiles.map((profile) => ({ harness: profile!.harness, profileId: profile!.id, model: profile!.model }))
-        : (teamConfig.workers?.length ? teamConfig.workers : [teamConfig.worker || 'codex']).map((harness) => ({ harness: harness as HarnessId, profileId: undefined, model: undefined }));
+        : (teamConfig.workers?.length ? teamConfig.workers : [teamConfig.worker || 'codex']).map((harness) => ({
+            harness: harness as HarnessId,
+            profileId: undefined,
+            model: teamConfig.workerModel || teamConfig.plannerModel,
+          }));
       const workerAgents = workerSlots.map((slot) => slot.harness);
 
       let criteria = run.acceptanceCriteria || [];
@@ -403,6 +407,7 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
         role: 'planner',
         lane: 'full-swarm',
         policyProfile,
+        pinnedModelId: teamConfig.plannerModel,
       });
 
       let planContent: string;

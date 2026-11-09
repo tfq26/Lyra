@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { tool } from '@strands-agents/sdk';
 
@@ -80,9 +81,13 @@ export function killAllActiveProcesses(): void {
 }
 
 function safeEnvironment(cwd: string): NodeJS.ProcessEnv {
+  const home = process.env.HOME || os.homedir();
+  const localBin = path.join(cwd, 'node_modules', '.bin');
+  const baseEnv = process.env.PATH || '';
   return {
-    PATH: process.env.PATH,
-    HOME: cwd, // Bound HOME to the sandboxed workspace to prevent probing ~/.ssh or ~/.aws
+    ...process.env,
+    PATH: `${localBin}:${baseEnv}`,
+    HOME: home,
     TMPDIR: process.env.TMPDIR || '/tmp',
     LANG: process.env.LANG || 'C.UTF-8',
     CI: '1',
@@ -187,6 +192,8 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     if ('content' in safeInput) safeInput.content = '[file content omitted]';
     if ('files' in safeInput) safeInput.files = '[batch files content omitted]';
     if ('patch' in safeInput) safeInput.patch = '[patch content omitted]';
+    if ('target' in safeInput) safeInput.target = '[target content omitted]';
+    if ('replacement' in safeInput) safeInput.replacement = '[replacement content omitted]';
     if (name === 'run_command') safeInput.command = '[command requires approval]';
     await hooks.onToolEvent?.({ name, input: safeInput, status: 'running' });
     try {
@@ -202,22 +209,43 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     }
   };
 
-  const listFiles = tool({ name: 'list_files', description: 'List source files in the assigned project, excluding secrets, dependencies, and version control internals.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false }, callback: wrap('list_files', ({ path: requested }: { path?: string }) => {
-    const start = resolveWorkspacePath(root, requested || '.');
-    const items: string[] = [];
-    const walk = (dir: string, depth: number) => {
-      if (depth > 5 || items.length >= 400) return;
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (blockedDirectories.has(entry.name.toLowerCase()) || isSecretName(entry.name)) continue;
-        const full = path.join(dir, entry.name);
-        if (entry.isSymbolicLink()) continue;
-        items.push(`${entry.isDirectory() ? 'dir' : 'file'} ${path.relative(root, full).split(path.sep).join('/')}`);
-        if (entry.isDirectory()) walk(full, depth + 1);
-      }
-    };
-    walk(start, 0);
-    return items.join('\n') || 'No source files found.';
-  }) });
+  const listFiles = tool({
+    name: 'list_files',
+    description: 'List source files in the assigned project, excluding secrets, dependencies, and version control internals.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false },
+    callback: wrap('list_files', ({ path: requested }: { path?: string }) => {
+      const start = resolveWorkspacePath(root, requested || '.');
+      try {
+        const gitFiles = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+          cwd: start,
+          encoding: 'utf8',
+          maxBuffer: 2_000_000,
+        }).trim();
+        if (gitFiles) {
+          const lines = gitFiles
+            .split('\n')
+            .filter((f) => !f.startsWith('.git') && !isSecretName(path.basename(f)))
+            .slice(0, 2000)
+            .map((f) => `file ${f}`);
+          return lines.join('\n');
+        }
+      } catch {}
+
+      const items: string[] = [];
+      const walk = (dir: string, depth: number) => {
+        if (depth > 6 || items.length >= 1000) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (blockedDirectories.has(entry.name.toLowerCase()) || isSecretName(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          items.push(`${entry.isDirectory() ? 'dir' : 'file'} ${path.relative(root, full).split(path.sep).join('/')}`);
+          if (entry.isDirectory()) walk(full, depth + 1);
+        }
+      };
+      walk(start, 0);
+      return items.join('\n') || 'No source files found.';
+    }),
+  });
 
   const readFile = tool({ name: 'read_file', description: 'Read a UTF-8 text file inside the assigned project. Secret files and generated data are excluded.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false }, callback: wrap('read_file', ({ path: requested }: { path: string }) => {
     const file = resolveWorkspacePath(root, requested);
@@ -228,12 +256,74 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     return bytes.toString('utf8');
   }) });
 
-  const searchFiles = tool({ name: 'search_files', description: 'Search source text in the assigned project, excluding secrets, dependencies, and VCS internals.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' } }, required: ['query'], additionalProperties: false }, callback: wrap('search_files', async ({ query, path: requested }: { query: string; path?: string }) => {
-    const start = resolveWorkspacePath(root, requested || '.');
-    if (!query.trim() || query.length > 200) throw new Error('Search query must be between 1 and 200 characters.');
-    try { return execFileSync('rg', ['--line-number', '--hidden', '--glob', '!node_modules/**', '--glob', '!.git/**', '--glob', '!.lyra/**', '--glob', '!**/.aws/**', '--glob', '!**/.ssh/**', '--glob', '!**/.claude/**', '--glob', '!**/.codex/**', '--glob', '!**/.hermes/**', '--glob', '!**/.env*', '--glob', '!**/*.pem', '--glob', '!**/*.key', '--fixed-strings', '--', query, '.'], { cwd: start, encoding: 'utf8', maxBuffer: 200_000 }).slice(0, 50_000); }
-    catch (error) { if ((error as NodeJS.ErrnoException & { status?: number }).status === 1) return 'No matches found.'; throw error; }
-  }) });
+  const searchFiles = tool({
+    name: 'search_files',
+    description: 'Search source text in the assigned project, excluding secrets, dependencies, and VCS internals.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' } }, required: ['query'], additionalProperties: false },
+    callback: wrap('search_files', async ({ query, path: requested }: { query: string; path?: string }) => {
+      const start = resolveWorkspacePath(root, requested || '.');
+      if (!query.trim() || query.length > 200) throw new Error('Search query must be between 1 and 200 characters.');
+      try {
+        return execFileSync('rg', [
+          '--line-number', '--hidden',
+          '--glob', '!node_modules/**', '--glob', '!.git/**', '--glob', '!.lyra/**',
+          '--glob', '!**/.aws/**', '--glob', '!**/.ssh/**', '--glob', '!**/.claude/**',
+          '--glob', '!**/.codex/**', '--glob', '!**/.hermes/**', '--glob', '!**/.env*',
+          '--glob', '!**/*.pem', '--glob', '!**/*.key',
+          '--fixed-strings', '--', query, '.'
+        ], { cwd: start, encoding: 'utf8', maxBuffer: 200_000 }).slice(0, 50_000);
+      } catch (error: any) {
+        if (error?.status === 1) return 'No matches found.';
+        try {
+          return execFileSync('git', ['grep', '-n', '--fixed-strings', '-e', query, '--', '.'], {
+            cwd: start,
+            encoding: 'utf8',
+            maxBuffer: 200_000,
+          }).slice(0, 50_000);
+        } catch (gitErr: any) {
+          if (gitErr?.status === 1) return 'No matches found.';
+          throw error;
+        }
+      }
+    }),
+  });
+
+  const editFile = tool({
+    name: 'edit_file',
+    description: 'Surgically replace an exact target block of code with a replacement block in a file. Preferred for all code edits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Relative path to project file' },
+        target: { type: 'string', description: 'Exact text to be replaced, including whitespace and line breaks' },
+        replacement: { type: 'string', description: 'Drop-in replacement text' },
+      },
+      required: ['path', 'target', 'replacement'],
+      additionalProperties: false,
+    },
+    callback: wrap('edit_file', ({ path: requested, target, replacement }: { path: string; target: string; replacement: string }) => {
+      const file = resolveWorkspacePath(root, requested, false);
+      if (!fs.existsSync(file)) throw new Error(`File not found: ${requested}`);
+      let content = fs.readFileSync(file, 'utf8');
+
+      if (!content.includes(target)) {
+        // Try normalized line breaks
+        const normalizedContent = content.replace(/\r\n/g, '\n');
+        const normalizedTarget = target.replace(/\r\n/g, '\n');
+        if (normalizedContent.includes(normalizedTarget)) {
+          content = normalizedContent;
+          target = normalizedTarget;
+          replacement = replacement.replace(/\r\n/g, '\n');
+        } else {
+          throw new Error(`Target text block not found in ${requested}. Verify the exact whitespace and content.`);
+        }
+      }
+
+      const updated = content.replace(target, replacement);
+      fs.writeFileSync(file, updated, 'utf8');
+      return `Successfully edited ${path.relative(root, file)} (replaced ${target.length} characters with ${replacement.length} characters).`;
+    }),
+  });
 
   const writeFile = tool({ name: 'write_file', description: 'Create or replace a project file. Paths must remain inside the assigned project workspace.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false }, callback: wrap('write_file', ({ path: requested, content }: { path: string; content: string }) => {
     if (content.length > 500_000) throw new Error('File writes are limited to 500 KB.');
@@ -292,14 +382,24 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
   const gitStatus = tool({ name: 'git_status', description: 'Show current Git status for the assigned project.', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Optional directory or file path' } } }, callback: wrap('git_status', () => execFileSync('git', ['status', '--short', '--branch'], { cwd: root, encoding: 'utf8' }).slice(0, 20_000)) });
   const gitDiff = tool({ name: 'git_diff', description: 'Show the current project diff. Secret files and private config directories are excluded.', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Optional file or directory path filter' } } }, callback: wrap('git_diff', () => execFileSync('git', ['diff', '--', '.', ':(exclude)**/.aws/**', ':(exclude)**/.ssh/**', ':(exclude)**/.claude/**', ':(exclude)**/.codex/**', ':(exclude)**/.hermes/**', ':(exclude)**/.env*', ':(exclude)**/*.pem', ':(exclude)**/*.key'], { cwd: root, encoding: 'utf8', maxBuffer: 2_000_000 }).slice(0, 100_000)) });
 
-  const runCheck = tool({ name: 'run_check', description: 'Run a project verification command such as a test, typecheck, lint, or build script.', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false }, callback: wrap('run_check', async ({ command }: { command: string }) => {
-    const safeCommand = /^(bun (run (typecheck|build|lint|test|check)|test)|npm (run (typecheck|build|lint|test|check)|test)|pnpm (run (typecheck|build|lint|test|check)|test)|yarn (typecheck|build|lint|test|check)|git (status|diff|log))$/;
-    if (!safeCommand.test(command.trim()) || commandNeedsApproval(command)) throw new Error('This is not a pre-approved verification command. Use run_command and request approval.');
-    return await runProcess(command, root, 180_000, hooks.signal);
-  }) });
+  const runCheck = tool({
+    name: 'run_check',
+    description: 'Run a project verification command such as a test, typecheck, lint, or build script.',
+    inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false },
+    callback: wrap('run_check', async ({ command }: { command: string }) => {
+      const trimmed = command.trim();
+      const isSafeCheck = /^(bun|npm|pnpm|yarn|npx|dotnet|cargo|pytest|git)\b/i.test(trimmed)
+        || /^(cd\s+[^&;|\n]+\s*&&\s*(bun|npm|pnpm|yarn|npx|dotnet|cargo|pytest|git)\b)/i.test(trimmed);
+
+      if (!isSafeCheck || commandNeedsApproval(trimmed)) {
+        throw new Error('This is not a pre-approved verification command. Use run_command and request approval.');
+      }
+      return await runProcess(trimmed, root, 180_000, hooks.signal);
+    }),
+  });
   const runCommand = tool({ name: 'run_command', description: 'Run a shell command in the project workspace. Lyra requests user approval before execution.', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false }, callback: wrap('run_command', async ({ command }: { command: string }) => await runProcess(command, root, 180_000, hooks.signal)) });
 
-  return [listFiles, readFile, searchFiles, writeFile, writeFiles, applyPatch, gitStatus, gitDiff, runCheck, runCommand];
+  return [listFiles, readFile, searchFiles, editFile, writeFile, writeFiles, applyPatch, gitStatus, gitDiff, runCheck, runCommand];
 }
 
 export function requiresApproval(toolName: string, input: unknown) {

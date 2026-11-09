@@ -30,4 +30,13 @@ describe('native project tools', () => {
     expect(serialized).not.toContain('private');
     expect(serialized).not.toContain('const apiKey');
   });
+
+  it('performs surgical search and replace edits with edit_file', async () => {
+    const tools = createNativeTools(root);
+    const edit = tools.find((item) => item.name === 'edit_file')!;
+    const read = tools.find((item) => item.name === 'read_file')!;
+    await edit.invoke({ path: 'src/index.ts', target: '"hello"', replacement: '"world"' });
+    const content = await read.invoke({ path: 'src/index.ts' });
+    expect(content).toContain('"world"');
+  });
 });

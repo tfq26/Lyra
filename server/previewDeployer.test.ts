@@ -33,8 +33,13 @@ describe('PreviewDeployer', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.provider).toBe('local');
-    expect(result.previewUrl).toContain('http://localhost:');
+    expect(['local', 'tunnel']).toContain(result.provider);
+    if (result.provider === 'tunnel') {
+      expect(result.previewUrl).toContain('http');
+      expect(result.localUrl).toContain('http://localhost:');
+    } else {
+      expect(result.previewUrl).toContain('http://localhost:');
+    }
 
     // Clean up
     await deployer.teardownPreview('test-run-123');

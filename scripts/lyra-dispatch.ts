@@ -8,7 +8,7 @@
  * Usage:
  *   bun run scripts/lyra-dispatch.ts "Implement OAuth2 & Stripe webhook"
  *   bun run scripts/lyra-dispatch.ts --async "Refactor database models"
- *   bun run scripts/lyra-dispatch.ts --model us.anthropic.claude-3-5-sonnet-20241022-v2:0 "Fix race condition"
+ *   bun run scripts/lyra-dispatch.ts --model us.anthropic.claude-sonnet-5 "Fix race condition"
  */
 
 import { parseArgs } from 'node:util';
@@ -90,6 +90,7 @@ async function main() {
       wait: { type: 'boolean', short: 'w', default: true },
       model: { type: 'string', short: 'm', default: 'auto' },
       workspace: { type: 'string', short: 'C', default: process.cwd() },
+      'auto-merge': { type: 'boolean', default: false },
       cloudUrl: { type: 'string', default: process.env.LYRA_CLOUD_URL || process.env.LYRA_HUB_URL },
       apiKey: { type: 'string', default: process.env.LYRA_GATEWAY_API_KEY || 'lyra-harness-default-secret' },
     },
@@ -185,6 +186,7 @@ Options:
     workspacePath,
     objective,
     model: selectedModelId,
+    approvalPolicy: 'auto',
   });
 
   console.log(`\n🚀 [Run Dispatched]`);
@@ -201,7 +203,7 @@ Options:
   const startTime = Date.now();
 
   await new Promise<void>((resolve) => {
-    const checkInterval = setInterval(() => {
+    const checkInterval = setInterval(async () => {
       const run = store.getRun(dispatchResult.sessionId, dispatchResult.runId);
       if (!run) return;
 
@@ -213,12 +215,29 @@ Options:
       process.stdout.write(`\r[${elapsed}s] State: ${state.toUpperCase().padEnd(16)} | Tasks: ${succeededTasks}/${totalTasks} completed`);
 
       const stateStr = String(state);
-      if (stateStr === 'completed' || stateStr === 'succeeded' || stateStr === 'failed' || stateStr === 'cancelled') {
+      if (stateStr === 'completed' || stateStr === 'succeeded' || stateStr === 'failed' || stateStr === 'cancelled' || stateStr === 'needs-attention') {
         clearInterval(checkInterval);
         console.log(`\n\n🏁 Swarm Run Finished with state: [${stateStr.toUpperCase()}] in ${elapsed}s`);
         if (stateStr === 'completed' || stateStr === 'succeeded') {
           console.log(`✅ Integration branch ready: lyra/integration-${dispatchResult.runId}`);
-          console.log(`   Run 'git merge lyra/integration-${dispatchResult.runId}' to merge.`);
+          if (values['auto-merge']) {
+            console.log(`🔀 Auto-merging lyra/integration-${dispatchResult.runId} into current branch...`);
+            const ffMerge = await execGit(['merge', '--ff-only', `lyra/integration-${dispatchResult.runId}`], workspacePath);
+            if (ffMerge.code === 0) {
+              console.log(`🎉 Fast-forward merged successfully into branch!`);
+              await execGit(['worktree', 'prune'], workspacePath);
+            } else {
+              const stdMerge = await execGit(['merge', '-m', `Lyra: Auto-merge ${objective}`, `lyra/integration-${dispatchResult.runId}`], workspacePath);
+              if (stdMerge.code === 0) {
+                console.log(`🎉 Merged successfully into branch!`);
+                await execGit(['worktree', 'prune'], workspacePath);
+              } else {
+                console.warn(`⚠️ Merge notice: ${stdMerge.stderr || ffMerge.stderr}. Please inspect manually.`);
+              }
+            }
+          } else {
+            console.log(`   Run 'git merge lyra/integration-${dispatchResult.runId}' to merge.`);
+          }
         }
         resolve();
       }

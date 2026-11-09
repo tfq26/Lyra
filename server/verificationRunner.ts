@@ -116,6 +116,40 @@ export class VerificationRunner {
       }
     }
 
+    // Check for nested subprojects (e.g., src/Draco.Web, frontend, client, web)
+    const candidateSubDirs = ['src/Draco.Web', 'frontend', 'client', 'web', 'ui'];
+    for (const sub of candidateSubDirs) {
+      const subPkgPath = path.join(cwd, sub, 'package.json');
+      if (fs.existsSync(subPkgPath)) {
+        try {
+          const subPkg = JSON.parse(fs.readFileSync(subPkgPath, 'utf-8'));
+          if (subPkg.scripts?.build) {
+            checks.push({
+              id: `check-nested-build-${sub.replace(/[^a-zA-Z0-9_-]/g, '-')}-${Date.now()}`,
+              runId: '',
+              name: `${sub} Build`,
+              command: `cd ${sub} && bun run build`,
+              status: 'pending',
+            });
+          }
+        } catch {}
+      }
+    }
+
+    // Check for .NET solution (.sln) or project files (.csproj)
+    try {
+      const hasDotnet = fs.readdirSync(cwd).some((f) => f.endsWith('.sln') || f.endsWith('.csproj'));
+      if (hasDotnet) {
+        checks.push({
+          id: `check-dotnet-build-${Date.now()}`,
+          runId: '',
+          name: '.NET Solution Build',
+          command: 'dotnet build',
+          status: 'pending',
+        });
+      }
+    } catch {}
+
     // Check for Cargo.toml
     if (fs.existsSync(path.join(cwd, 'Cargo.toml'))) {
       checks.push({

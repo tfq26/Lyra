@@ -49,6 +49,11 @@ export class LyraHarnessMcpServer {
               type: 'string',
               description: 'Target Bedrock model (e.g., us.anthropic.claude-sonnet-4-6, us.anthropic.claude-haiku-4-5-20251001-v1:0).',
             },
+            approvalPolicy: {
+              type: 'string',
+              enum: ['auto', 'risk-gated', 'manual'],
+              description: 'Plan approval policy. Defaults to "auto" for unattended execution.',
+            },
           },
           required: ['objective', 'workspacePath'],
         },
@@ -353,6 +358,7 @@ export class LyraHarnessMcpServer {
           objective: args.objective,
           workspacePath: args.workspacePath,
           model: args.model,
+          approvalPolicy: args.approvalPolicy || 'auto',
         });
         return {
           content: [{
@@ -458,6 +464,7 @@ export class LyraHarnessMcpServer {
         const dispatchRes = await this.gateway.dispatchTask({
           objective: args.objective,
           workspacePath: args.workspacePath,
+          approvalPolicy: args.approvalPolicy || 'auto',
         });
 
         // 2. Resolve token
