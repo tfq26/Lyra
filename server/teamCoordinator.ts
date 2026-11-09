@@ -622,6 +622,7 @@ Standards:
 5. NEVER duplicate existing endpoints, methods, or variable declarations. If a file already declares 'app' or maps an endpoint, integrate cleanly without re-declaring variables.
 6. Verify your changes by running 'run_check' with the appropriate build or test command before completing your turn. Do not report success if compiler errors exist.
 7. PREFER using 'write_files' to batch create or update multiple files in a single fast turn.
+8. Maintain existing architectural conventions: If an existing file uses ASP.NET Core Minimal APIs (static extension methods on IEndpointRouteBuilder like app.MapGet), preserve that structure. Do not replace static extension classes with Controller classes.
 At completion, report changes, decisions, blockers, and any handoff in a concise summary. If another agent needs information, include a line in this exact form: [LYRA MESSAGE to=team]message text[/LYRA MESSAGE].`;
 
         let workerResult: { code: number; fullContent?: string; error?: string; cancelled?: boolean; usage?: any };
@@ -658,12 +659,26 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
         // Compile Gate: verify the task left the project in a buildable/compiling state before accepting
         if (success) {
           const checks = this.verificationRunner.discoverProjectChecks(taskCwd);
-          const buildChecks = checks.filter((c) =>
-            c.command.includes('build') ||
-            c.command.includes('tsc') ||
-            c.command.includes('cargo check') ||
-            c.name.toLowerCase().includes('typecheck')
-          );
+          const isDotnetTask = (task.scope || '').endsWith('.cs') || (task.scope || '').includes('.Api') || (task.scope || '').includes('.Core') || (task.scope || '').includes('.Domain') || (task.scope || '').includes('.Infrastructure');
+          const isFrontendTask = (task.scope || '').endsWith('.tsx') || (task.scope || '').endsWith('.jsx') || (task.scope || '').includes('.Web') || (task.scope || '').includes('frontend') || (task.scope || '').includes('client');
+
+          const buildChecks = checks.filter((c) => {
+            const isBuild = c.command.includes('build') ||
+              c.command.includes('tsc') ||
+              c.command.includes('cargo check') ||
+              c.name.toLowerCase().includes('typecheck');
+            if (!isBuild) return false;
+
+            // If task is exclusively C#/.NET backend, skip nested frontend web checks
+            if (isDotnetTask && !isFrontendTask && (c.name.includes('Web') || c.command.includes('bun run') || c.command.includes('npm run'))) {
+              return false;
+            }
+            // If task is exclusively frontend, skip .NET solution checks
+            if (isFrontendTask && !isDotnetTask && c.command.includes('dotnet')) {
+              return false;
+            }
+            return true;
+          });
 
           for (const buildCheck of buildChecks) {
             const checkRes = await this.verificationRunner.runCheck(buildCheck, taskCwd);

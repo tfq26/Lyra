@@ -124,8 +124,17 @@ export class VerificationRunner {
       }
     }
 
-    // Check for nested subprojects (e.g., src/Draco.Web, frontend, client, web)
-    const candidateSubDirs = ['src/Draco.Web', 'frontend', 'client', 'web', 'ui'];
+    // Check for nested subprojects (e.g., frontend, client, web, ui, or src/*)
+    const candidateSubDirs = ['frontend', 'client', 'web', 'ui'];
+    if (fs.existsSync(path.join(cwd, 'src'))) {
+      try {
+        for (const entry of fs.readdirSync(path.join(cwd, 'src'), { withFileTypes: true })) {
+          if (entry.isDirectory() && fs.existsSync(path.join(cwd, 'src', entry.name, 'package.json'))) {
+            candidateSubDirs.push(`src/${entry.name}`);
+          }
+        }
+      } catch {}
+    }
     for (const sub of candidateSubDirs) {
       const subPkgPath = path.join(cwd, sub, 'package.json');
       if (fs.existsSync(subPkgPath)) {
@@ -296,13 +305,15 @@ export class VerificationRunner {
         } catch {}
       } else {
         // Root has no package.json; check nested subprojects (e.g. src/Draco.Web, frontend, etc.)
-        for (const sub of ['src/Draco.Web', 'frontend', 'client', 'web', 'ui']) {
+        for (const sub of ['frontend', 'client', 'web', 'ui']) {
           const subPkg = path.join(cwd, sub, 'package.json');
           if (fs.existsSync(subPkg)) {
             try {
               const parsed = JSON.parse(fs.readFileSync(subPkg, 'utf8'));
               if (parsed.scripts && parsed.scripts[scriptName]) {
-                effectiveCommand = `cd ${sub} && ${effectiveCommand}`;
+                if (!effectiveCommand.startsWith('cd ') && !effectiveCommand.includes(`cd ${sub}`)) {
+                  effectiveCommand = `cd ${sub} && ${effectiveCommand}`;
+                }
                 scriptExists = true;
                 break;
               }
