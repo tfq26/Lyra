@@ -8,6 +8,7 @@ import { VerificationRunner } from './verificationRunner';
 import { PreviewManager } from './previewManager';
 import { BedrockProvider } from './bedrockProvider';
 import { parseSwarmPlan } from './planValidator';
+import { findCandidateFiles, formatCandidateFilesSection } from './repoScanner';
 import { ScribeAgent } from './scribeAgent';
 import { DecisionEngine } from './decisionEngine';
 import { ModelDecisionEngine } from './modelDecisionEngine';
@@ -393,8 +394,13 @@ export class TeamCoordinator extends EventEmitter {
           runId,
         });
 
-      const planPrompt = `You are Lyra's Lead Architect. Inspect the repository in read-only mode and return JSON only.
+      const plannerReadCwd = executionCwd && fs.existsSync(executionCwd) ? executionCwd : repoPath;
+      const candidateFiles = findCandidateFiles(plannerReadCwd, objective);
+      const candidateSection = formatCandidateFilesSection(candidateFiles);
+
+      const planPrompt = `You are Lyra's Lead Architect. Return JSON only.
 Objective: ${objective}
+${candidateSection}
 Available worker harnesses: ${workerSlots.map((slot) => `${slot.harness}${slot.profileId ? ` (profile ${slot.profileId})` : ''}`).join(', ')}
 
 Return JSON with this structure:
@@ -421,8 +427,6 @@ Return JSON with this structure:
   ]
 }
 Split independent work into 1-24 tasks. Include concrete file scope and safe checks.`;
-
-      const plannerReadCwd = executionCwd && fs.existsSync(executionCwd) ? executionCwd : repoPath;
       const plannerRoute = resolveOptimalModel({
         prompt: objective,
         role: 'planner',
@@ -592,12 +596,15 @@ Split independent work into 1-24 tasks. Include concrete file scope and safe che
         const workspaceSnapshot = this.getWorkspaceSnapshot(taskCwd);
         const speculativeContext = this.getSpeculativeContext(taskCwd, task);
         const designSystemGuidelines = this.getDesignSystemGuidelines(task);
+        const candidateFiles = findCandidateFiles(taskCwd, `${task.title} ${task.description || ''} ${task.scope || ''}`);
+        const candidateSection = formatCandidateFilesSection(candidateFiles);
 
         const workerPrompt = `You are an implementation agent in the Lyra swarm.
 Objective: ${objective}
 Your Assigned Task: ${task.title}
 Description: ${task.description || task.title}
 Scope: ${task.scope || 'Stay focused on your assigned task; do not edit files outside its scope.'}
+${candidateSection}
 Acceptance Criteria:
 ${criteria.map((c) => `- ${c}`).join('\n')}
 ${completedPredecessors ? `\nPredecessor Tasks Completed:\n${completedPredecessors}\n` : ''}

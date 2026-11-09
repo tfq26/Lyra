@@ -247,14 +247,36 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     }),
   });
 
-  const readFile = tool({ name: 'read_file', description: 'Read a UTF-8 text file inside the assigned project. Secret files and generated data are excluded.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false }, callback: wrap('read_file', ({ path: requested }: { path: string }) => {
-    const file = resolveWorkspacePath(root, requested);
-    const stat = fs.statSync(file);
-    if (!stat.isFile() || stat.size > 200_000) throw new Error('File is not a regular text file or exceeds the 200 KB read limit.');
-    const bytes = fs.readFileSync(file);
-    if (bytes.includes(0)) throw new Error('Binary files are not available through read_file.');
-    return bytes.toString('utf8');
-  }) });
+  const readFile = tool({
+    name: 'read_file',
+    description: 'Read a UTF-8 text file inside the assigned project. Supports optional startLine and endLine to inspect a specific numbered line window.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        startLine: { type: 'number', description: 'Optional 1-based start line' },
+        endLine: { type: 'number', description: 'Optional 1-based end line' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    callback: wrap('read_file', ({ path: requested, startLine, endLine }: { path: string; startLine?: number; endLine?: number }) => {
+      const file = resolveWorkspacePath(root, requested);
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > 500_000) throw new Error('File is not a regular text file or exceeds the 500 KB read limit.');
+      const content = fs.readFileSync(file, 'utf8');
+      if (content.includes('\0')) throw new Error('Binary files are not available through read_file.');
+
+      if (startLine !== undefined || endLine !== undefined) {
+        const lines = content.split('\n');
+        const start = Math.max(1, startLine || 1);
+        const end = Math.min(lines.length, endLine || lines.length);
+        const sliced = lines.slice(start - 1, end);
+        return sliced.map((line, idx) => `${start + idx} | ${line}`).join('\n');
+      }
+      return content;
+    }),
+  });
 
   const searchFiles = tool({
     name: 'search_files',
