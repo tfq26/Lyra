@@ -11,7 +11,6 @@ import {
   ChevronRight, 
   Copy, 
   Check, 
-  ArrowRight
 } from 'lucide-react';
 
 interface MessageItemProps {
@@ -19,7 +18,7 @@ interface MessageItemProps {
   onDispatchToAgent?: (toAgent: AgentType, content: string) => void;
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToAgent }) => {
+export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
   const [showThinking, setShowThinking] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -51,9 +50,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
       case 'antigravity':
         return 'Antigravity';
       case 'claude_code':
-        return 'Claude Code';
+        return 'Claude';
       case 'codex':
         return 'Codex';
+      case 'orchestrator':
+        return 'Orchestrator';
       default:
         return 'Assistant';
     }
@@ -62,17 +63,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
   if (isUser) {
     return (
       <div className="flex flex-col items-end w-full group animate-fade-in">
-        <div className="flex items-center gap-1.5 mb-0.5 px-1 text-[10px] text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity select-none">
+        <div className="flex items-center gap-2 mb-1 px-1 text-[11px] text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity select-none">
           <span>{formatTimestamp(message.timestamp)}</span>
           <button
             onClick={handleCopy}
             className="text-neutral-500 hover:text-neutral-300 transition-colors p-0.5"
             title="Copy message"
           >
-            {copied ? <Check className="w-2.5 h-2.5 text-neutral-300" /> : <Copy className="w-2.5 h-2.5" />}
+            {copied ? <Check className="w-3 h-3 text-neutral-300" /> : <Copy className="w-3 h-3" />}
           </button>
         </div>
-        <div className="max-w-[80%] sm:max-w-[65%] rounded-xl rounded-tr-xs bg-neutral-800/80 border border-neutral-700/40 px-3 py-1.5 text-neutral-200 text-xs leading-normal shadow-xs">
+        <div className="max-w-[85%] sm:max-w-[70%] rounded-2xl bg-neutral-800/90 border border-neutral-700/40 px-4 py-2.5 text-neutral-100 text-[13px] leading-relaxed shadow-xs">
           {displayContent}
         </div>
       </div>
@@ -82,12 +83,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
   return (
     <div className="flex flex-col items-start w-full space-y-2 group animate-fade-in">
       {/* Author Header */}
-      <div className="flex items-center justify-between w-full">
+      <div className="flex items-center justify-between w-full select-none pt-1">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center text-[10px] font-medium text-neutral-300">
-            {message.agentType === 'claude_code' ? 'C' : message.agentType === 'codex' ? 'X' : 'A'}
-          </div>
-          <span className="text-xs font-medium text-neutral-200">
+          <span className="text-xs font-semibold text-neutral-200 tracking-tight">
             {getAgentLabel(message.agentType)}
           </span>
           <span className="text-[11px] text-neutral-500">
@@ -95,139 +93,76 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
           </span>
         </div>
 
-        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          {onDispatchToAgent && (
-            <div className="flex items-center gap-1">
-              {(['antigravity', 'claude_code', 'codex'] as AgentType[])
-                .filter((a) => a !== message.agentType)
-                .map((target) => (
-                  <button
-                    key={target}
-                    onClick={() => onDispatchToAgent(target, message.content)}
-                    className="px-2 py-0.5 rounded text-[10px] border border-neutral-800 bg-neutral-900/60 hover:bg-neutral-800 hover:text-neutral-200 text-neutral-500 transition-colors flex items-center gap-1"
-                  >
-                    <ArrowRight className="w-2.5 h-2.5" />
-                    <span>{target === 'claude_code' ? 'Claude' : target === 'antigravity' ? 'AGY' : 'Codex'}</span>
-                  </button>
-                ))}
-            </div>
-          )}
-          <button
-            onClick={handleCopy}
-            className="text-neutral-500 hover:text-neutral-300 transition-colors p-1"
-            title="Copy message"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-neutral-300" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-        </div>
+        <button
+          onClick={handleCopy}
+          className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-neutral-300 transition-opacity p-1 rounded hover:bg-neutral-800/40"
+          title="Copy message"
+        >
+          {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+        </button>
       </div>
 
-      {/* Quiet Reasoning / Thinking Disclosure */}
+      {/* Thinking Accordion (Quiet & Clean) */}
       {message.thinking && (
-        <div className="border-l-2 border-neutral-800 pl-3 py-0.5 my-1 space-y-1 ml-7">
+        <div className="w-full">
           <button
             onClick={() => setShowThinking(!showThinking)}
-            className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300 transition-colors select-none"
+            className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-400 transition-colors py-0.5 select-none"
           >
-            {showThinking ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <span>Reasoning</span>
+            {showThinking ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+            <span>Thought process</span>
           </button>
+
           {showThinking && (
-            <div className="text-xs text-neutral-400 whitespace-pre-wrap leading-relaxed pt-1 max-h-60 overflow-y-auto">
+            <div className="mt-1.5 pl-3 border-l-2 border-neutral-800 text-neutral-400 text-xs font-mono whitespace-pre-wrap leading-relaxed py-1">
               {message.thinking}
             </div>
           )}
         </div>
       )}
 
+      {/* Primary Message Content */}
+      {displayContent && (
+        <div className="w-full text-[13px] leading-relaxed text-neutral-200 prose prose-invert max-w-none prose-p:my-2 prose-pre:my-2 prose-pre:bg-neutral-900 prose-pre:border prose-pre:border-neutral-800/80">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {displayContent}
+          </ReactMarkdown>
+        </div>
+      )}
+
       {/* Tool Executions */}
       {message.toolCalls && message.toolCalls.length > 0 && (
-        <div className="space-y-1 my-1 w-full pl-7">
-          {message.toolCalls.map((tool) => (
-            <ToolExecutionCard key={tool.id} toolCall={tool} />
+        <div className="w-full space-y-1 pt-1">
+          {message.toolCalls.map((tc) => (
+            <ToolExecutionCard key={tc.id} toolCall={tc} />
           ))}
         </div>
       )}
 
       {/* File Diffs */}
       {message.diffs && message.diffs.length > 0 && (
-        <div className="space-y-1 my-1 w-full pl-7">
-          {message.diffs.map((diff, i) => (
-            <DiffViewer key={i} diff={diff} />
+        <div className="w-full space-y-2 pt-2">
+          {message.diffs.map((diff, idx) => (
+            <DiffViewer key={idx} diff={diff} />
           ))}
         </div>
       )}
 
-      {/* Content Render */}
-      {message.content && (
-        <div className="text-neutral-200 text-xs sm:text-sm leading-relaxed space-y-3 prose prose-invert max-w-none pl-7 w-full">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ node, className, children, ...props }) {
-                  const match = /language-(\w+)/.exec(className || '');
-                  const language = match ? match[1] : '';
-                  const codeString = String(children).replace(/\n$/, '');
-
-                  if (language === 'mermaid') {
-                    return <MermaidDiagram chart={codeString} />;
-                  }
-
-                  const isInline = !match && !codeString.includes('\n');
-                  if (isInline) {
-                    return (
-                      <code className="px-1.5 py-0.5 rounded text-[11px] bg-neutral-900 text-neutral-300 border border-neutral-800" {...props}>
-                        {children}
-                      </code>
-                    );
-                  }
-
-                  return (
-                    <div className="my-3 rounded-md border border-neutral-800 bg-[#0c0c0e] overflow-hidden text-xs not-prose">
-                      {language && (
-                        <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-900/60 border-b border-neutral-800 text-[11px] text-neutral-400">
-                          <span>{language}</span>
-                          <button
-                            onClick={() => navigator.clipboard.writeText(codeString)}
-                            className="hover:text-neutral-200 transition-colors"
-                          >
-                            Copy
-                          </button>
-                        </div>
-                      )}
-                      <pre className="p-3 overflow-x-auto text-neutral-200 text-xs">
-                        <code>{codeString}</code>
-                      </pre>
-                    </div>
-                  );
-                },
-                p({ children }) {
-                  return <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>;
-                },
-                ul({ children }) {
-                  return <ul className="list-disc pl-5 mb-2 space-y-1 text-neutral-300">{children}</ul>;
-                },
-                ol({ children }) {
-                  return <ol className="list-decimal pl-5 mb-2 space-y-1 text-neutral-300">{children}</ol>;
-                },
-                h1({ children }) {
-                  return <h1 className="text-sm font-semibold text-neutral-100 mt-4 mb-2">{children}</h1>;
-                },
-                h2({ children }) {
-                  return <h2 className="text-xs font-semibold text-neutral-100 mt-3 mb-1.5">{children}</h2>;
-                },
-                h3({ children }) {
-                  return <h3 className="text-xs font-medium text-neutral-300 mt-2 mb-1">{children}</h3>;
-                },
-                blockquote({ children }) {
-                  return <blockquote className="border-l-2 border-neutral-700 pl-3 py-0.5 text-neutral-400 my-2 italic text-xs">{children}</blockquote>;
-                }
-              }}
-            >
-              {displayContent}
-            </ReactMarkdown>
-          </div>
-        )}
+      {/* Artifacts (Mermaid, etc.) */}
+      {message.artifacts && message.artifacts.length > 0 && (
+        <div className="w-full space-y-2 pt-2">
+          {message.artifacts.map((art) => {
+            if (art.type === 'mermaid') {
+              return <MermaidDiagram key={art.id} chart={art.content} />;
+            }
+            return null;
+          })}
+        </div>
+      )}
     </div>
   );
 };

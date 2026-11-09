@@ -4,7 +4,6 @@ import { MessageItem } from './MessageItem';
 import { AgentSelector } from './AgentSelector';
 import { ArrowUp, Loader2, Trash2, Square } from 'lucide-react';
 import { MessageHistorySkeleton } from './Skeletons';
-import { AgentOptions } from './AgentOptions';
 
 interface ChatViewProps {
   sessionTitle: string;
@@ -35,8 +34,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   agentStatuses,
   isLoadingMessages = false,
   onCancelRun,
-  agentOptions,
-  onAgentOptionsChange,
   agentCapabilities = {},
 }) => {
   const [prompt, setPrompt] = useState('');
@@ -47,7 +44,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const handleScroll = () => {
     if (!mainRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = mainRef.current;
-    // Keep auto-scroll active if user is within 100px of bottom
     shouldAutoScrollRef.current = scrollHeight - (scrollTop + clientHeight) < 100;
   };
 
@@ -98,37 +94,42 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
+  const agentDisplayName = activeAgent === 'claude_code' ? 'Claude' : activeAgent === 'codex' ? 'Codex' : 'Antigravity';
+
   return (
-    <div className="flex-1 flex flex-col h-screen bg-[#09090b]">
-      {/* Calm Top Header */}
+    <div className="flex-1 flex flex-col h-screen bg-[#08080a]">
+      {/* Calm, Professional Header */}
       <header 
         data-tauri-drag-region
-        className="h-12 border-b border-neutral-800/70 px-4 flex items-center justify-between bg-[#09090b]/90 backdrop-blur-sm z-10 select-none"
+        className="h-13 border-b border-neutral-800/60 px-5 flex items-center justify-between bg-[#08080a]/90 backdrop-blur-md z-10 select-none"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <AgentSelector
             activeAgent={activeAgent}
             onSelectAgent={onSelectAgent}
             statusMap={agentStatuses}
             capabilities={agentCapabilities}
           />
-          <span className="text-xs text-neutral-500 truncate max-w-xs hidden sm:inline">
+          <span className="text-xs text-neutral-500 truncate max-w-xs hidden md:inline">
             {sessionTitle}
           </span>
-          <AgentOptions agent={activeAgent} options={agentOptions} onChange={onAgentOptionsChange} />
         </div>
 
         <div className="flex items-center gap-2">
           {isStreaming && (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] text-neutral-400 bg-neutral-900 border border-neutral-800">
-              <Loader2 className="w-3 h-3 animate-spin text-neutral-300" />
-              <span>Thinking...</span>
+            <div className="flex items-center gap-2 text-xs text-neutral-400 mr-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-300" />
+              <span>Generating...</span>
             </div>
           )}
 
           {isStreaming && onCancelRun && (
-            <button onClick={onCancelRun} className="p-1.5 rounded-md text-neutral-500 hover:text-rose-300 hover:bg-neutral-800/50 transition-colors" title="Cancel run">
-              <Square className="w-3.5 h-3.5" />
+            <button
+              onClick={onCancelRun}
+              className="p-1.5 rounded-md text-neutral-500 hover:text-rose-400 hover:bg-neutral-800/50 transition-colors"
+              title="Stop generation"
+            >
+              <Square className="w-4 h-4" />
             </button>
           )}
 
@@ -136,38 +137,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               onClick={onClearSession}
               className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800/50 transition-colors"
-              title="Clear messages"
+              title="Clear conversation"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
             </button>
           )}
         </div>
       </header>
 
-      {/* Messages area */}
+      {/* Messages Scroll Area */}
       <main ref={mainRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
         {isLoadingMessages ? (
           <MessageHistorySkeleton />
         ) : messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-lg mx-auto space-y-4 animate-fade-in">
-            <div className="space-y-1">
-              <h2 className="text-sm font-medium text-neutral-200">Unified Agent Workspace</h2>
+          <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto space-y-5 animate-fade-in">
+            <div className="space-y-1.5">
+              <h2 className="text-sm font-semibold text-neutral-100 tracking-tight">Lyra Console</h2>
               <p className="text-xs text-neutral-500 leading-relaxed">
-                Seamlessly interact with Antigravity, Claude Code, and Codex in a unified workspace.
+                Autonomous pairing with {agentDisplayName}. Ask questions, dispatch tasks, or inspect code diffs.
               </p>
             </div>
 
-            {/* Subtle quick prompts */}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-2">
+            {/* Quiet Quick Actions */}
+            <div className="flex flex-col w-full gap-2 pt-1 text-left">
               <button
                 onClick={() =>
                   handleInsertPrompt(
                     'Analyze the architecture of this project and generate a Mermaid diagram.'
                   )
                 }
-                className="px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60 hover:border-neutral-700 transition-colors text-neutral-400 hover:text-neutral-200 text-xs text-left"
+                className="px-3.5 py-2.5 rounded-lg border border-neutral-800/70 bg-neutral-900/30 hover:bg-neutral-800/50 hover:border-neutral-700 transition-colors text-xs text-neutral-400 hover:text-neutral-200"
               >
-                Generate architecture diagram
+                Analyze architecture and diagram dependencies
               </button>
               <button
                 onClick={() =>
@@ -175,14 +176,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     'Review pending file diffs, explain the changes, and check test coverage.'
                   )
                 }
-                className="px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60 hover:border-neutral-700 transition-colors text-neutral-400 hover:text-neutral-200 text-xs text-left"
+                className="px-3.5 py-2.5 rounded-lg border border-neutral-800/70 bg-neutral-900/30 hover:bg-neutral-800/50 hover:border-neutral-700 transition-colors text-xs text-neutral-400 hover:text-neutral-200"
               >
-                Review code diffs
+                Review code changes and verify tests
               </button>
             </div>
           </div>
         ) : (
-          <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-6 animate-fade-in">
+          <div className="max-w-3xl mx-auto p-5 sm:p-8 space-y-6 animate-fade-in">
             {messages.map((message) => (
               <MessageItem
                 key={message.id}
@@ -194,30 +195,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
       </main>
 
-      {/* Input area */}
-      <footer className="p-4 bg-[#09090b] border-t border-neutral-800/70">
+      {/* Input Area */}
+      <footer className="p-4 sm:p-5 bg-[#08080a] border-t border-neutral-800/50">
         <div className="max-w-3xl mx-auto">
           <form
             onSubmit={handleSubmit}
-            className="relative rounded-lg border border-neutral-800 bg-neutral-900/60 focus-within:border-neutral-700 focus-within:bg-neutral-900 transition-all shadow-sm"
+            className="relative rounded-xl border border-neutral-800/80 bg-neutral-900/40 focus-within:border-neutral-700/90 focus-within:bg-neutral-900/70 transition-all shadow-xs"
           >
             <textarea
               ref={textareaRef}
               value={prompt}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder={`Ask ${activeAgent === 'claude_code' ? 'Claude' : activeAgent === 'codex' ? 'Codex' : 'Antigravity'}...`}
+              placeholder={`Message ${agentDisplayName}...`}
               rows={1}
-              className="w-full bg-transparent px-3.5 py-2.5 pr-10 text-xs text-neutral-100 placeholder:text-neutral-600 focus:outline-none resize-none"
+              className="w-full bg-transparent px-4 py-3 pr-12 text-[13px] text-neutral-100 placeholder:text-neutral-600 focus:outline-none resize-none leading-relaxed"
               style={{ maxHeight: '180px' }}
             />
 
-            <div className="absolute right-2 bottom-2 flex items-center">
+            <div className="absolute right-2.5 bottom-2.5 flex items-center">
               <button
                 type="submit"
                 disabled={!prompt.trim() || isStreaming}
-                className="p-1 rounded-md bg-neutral-200 text-neutral-950 hover:bg-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
-                title="Send instruction"
+                className="p-1.5 rounded-lg bg-neutral-100 text-neutral-950 hover:bg-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+                title="Send"
               >
                 {isStreaming ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
