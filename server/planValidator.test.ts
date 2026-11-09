@@ -57,4 +57,36 @@ describe('swarm plan validation', () => {
     expect(plan.tasks[1]?.dependencies).toEqual(['task-run-zero-1']);
     expect(plan.tasks[2]?.dependencies).toEqual(['task-run-zero-1', 'task-run-zero-2']);
   });
+
+  it('correctly extracts the final plan when conversation includes intermediate tool calls and multiple JSON objects', () => {
+    const multiTurnText = `
+<thinking> Initial thoughts </thinking>
+{
+  "appraisal": { "problemSummary": "Initial draft" },
+  "acceptanceCriteria": ["Initial criteria"],
+  "tasks": [{ "title": "Initial task", "scope": "." }],
+  "checks": []
+}
+
+⏳ list_files
+✓ Tool completed
+
+<thinking> Based on tool results, refine plan </thinking>
+
+{
+  "appraisal": { "problemSummary": "Refined problem assessment" },
+  "acceptanceCriteria": ["Endpoint works", "Utility works"],
+  "tasks": [
+    { "title": "Implement API", "scope": "api/", "dependsOn": [] },
+    { "title": "Implement Web", "scope": "web/", "dependsOn": ["Implement API"] }
+  ],
+  "checks": [{ "name": "Build", "command": "npm run build" }]
+}
+`;
+    const plan = parseSwarmPlan(multiTurnText, 'multi-1', workers);
+    expect(plan.acceptanceCriteria).toEqual(['Endpoint works', 'Utility works']);
+    expect(plan.tasks).toHaveLength(2);
+    expect(plan.tasks[1]?.title).toBe('Implement Web');
+    expect(plan.tasks[1]?.dependencies).toEqual(['task-multi-1-1']);
+  });
 });

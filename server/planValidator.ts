@@ -6,22 +6,54 @@ export interface ValidatedPlan { acceptanceCriteria: string[]; tasks: TaskItem[]
 
 function jsonBody(text: string): unknown | null {
   // Strip <thinking>...</thinking> blocks
-  let cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+  const cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
 
-  // Extract from ```json ``` code fence if present
-  const codeBlockMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (codeBlockMatch && codeBlockMatch[1] !== undefined) {
-    cleanText = codeBlockMatch[1].trim();
-  } else {
-    // Or find outer balanced JSON object
-    const startIdx = cleanText.indexOf('{');
-    const endIdx = cleanText.lastIndexOf('}');
-    if (startIdx !== -1 && endIdx > startIdx) {
-      cleanText = cleanText.slice(startIdx, endIdx + 1);
+  // 1. Try code blocks from last to first
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi;
+  const codeBlocks: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = codeBlockRegex.exec(cleanText)) !== null) {
+    if (match[1]) codeBlocks.push(match[1].trim());
+  }
+  for (let i = codeBlocks.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(codeBlocks[i]!) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object' && (parsed.tasks || parsed.acceptanceCriteria)) {
+        return parsed;
+      }
+    } catch {}
+  }
+
+  // 2. Scan from last closing brace backwards to find matching opening brace for last balanced JSON object
+  const lastClose = cleanText.lastIndexOf('}');
+  if (lastClose !== -1) {
+    let depth = 0;
+    for (let i = lastClose; i >= 0; i--) {
+      if (cleanText[i] === '}') depth++;
+      else if (cleanText[i] === '{') {
+        depth--;
+        if (depth === 0) {
+          const candidate = cleanText.slice(i, lastClose + 1);
+          try {
+            const parsed = JSON.parse(candidate) as Record<string, unknown>;
+            if (parsed && typeof parsed === 'object' && (parsed.tasks || parsed.acceptanceCriteria)) {
+              return parsed;
+            }
+          } catch {}
+        }
+      }
     }
   }
 
-  try { return JSON.parse(cleanText); } catch { return null; }
+  // 3. Fallback: try outer { ... }
+  const startIdx = cleanText.indexOf('{');
+  if (startIdx !== -1 && lastClose > startIdx) {
+    try {
+      return JSON.parse(cleanText.slice(startIdx, lastClose + 1));
+    } catch {}
+  }
+
+  return null;
 }
 
 export function parseSwarmPlan(text: string, runId: string, workers: WorkerSlot[]): ValidatedPlan {
