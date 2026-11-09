@@ -76,13 +76,17 @@ export function resolveOptimalModel(ctx: RoutingContext): ModelRouteDecision {
         ? 'balanced'
         : 'frontier');
 
-  // If user pinned a model ID or set BEDROCK_MODEL_ID in env, prioritize it
-  const pinnedOrEnv = (ctx.pinnedModelId && ctx.pinnedModelId !== 'auto')
-    ? ctx.pinnedModelId
-    : (process.env.BEDROCK_MODEL_ID || process.env.LYRA_PRIMARY_MODEL);
+  // Explicit caller/config pin takes absolute precedence
+  const explicitPin = (ctx.pinnedModelId && ctx.pinnedModelId !== 'auto') ? ctx.pinnedModelId : undefined;
 
-  const normalizedPinned = pinnedOrEnv
-    ? catalog.resolveActiveModel(pinnedOrEnv).modelId
+  // Environment model acts as default frontier anchor for high-reasoning roles (planner, reviewer),
+  // while leaf workers and scribes leverage fast, cost-effective tiering (e.g. Nova 2 Lite at $0.06/M)
+  const isHighReasoningRole = ctx.role === 'planner' || ctx.role === 'architect' || ctx.role === 'reviewer';
+  const envModel = process.env.BEDROCK_MODEL_ID || process.env.LYRA_PRIMARY_MODEL;
+
+  const pinnedCandidate = explicitPin || (isHighReasoningRole ? envModel : undefined);
+  const normalizedPinned = pinnedCandidate
+    ? catalog.resolveActiveModel(pinnedCandidate).modelId
     : undefined;
 
   const req: TaskRequirement = {

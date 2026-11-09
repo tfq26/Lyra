@@ -263,6 +263,9 @@ export class CloudWatchEmfRegistry {
         existing.lastThrottledAt = Date.now();
       } else if (existing.recentThrottleCount > 0 && successSample === 1) {
         existing.recentThrottleCount = Math.max(0, existing.recentThrottleCount - 1);
+        if (existing.recentThrottleCount === 0) {
+          existing.lastThrottledAt = undefined;
+        }
       }
       existing.lastUpdatedAt = timestamp;
     }
@@ -277,6 +280,20 @@ export class CloudWatchEmfRegistry {
 
   public getModelLiveHealth(modelId: string): ModelLiveHealth | undefined {
     return this.modelHealth.get(modelId);
+  }
+
+  public reset(): void {
+    this.modelHealth.clear();
+    this.recentTurns = [];
+    this.totalTurns = 0;
+    this.totalInputTokens = 0;
+    this.totalOutputTokens = 0;
+    this.totalCacheReadTokens = 0;
+    this.totalCostUsd = 0;
+    this.frontierBaselineCostUsd = 0;
+    this.promptCacheSavingsUsd = 0;
+    this.failoversTriggered = 0;
+    this.tierEscalationsTriggered = 0;
   }
 
   public getSnapshot(): TelemetrySnapshot {

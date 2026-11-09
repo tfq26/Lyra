@@ -55,7 +55,14 @@ const DEFAULT_CROSS_REGION_PROFILES: Record<string, string> = {
   'us.deepseek.r1-v1:0': 'us.deepseek.r1-v1:0',
   'amazon.nova-pro-v1:0': 'us.amazon.nova-pro-v1:0',
   'us.amazon.nova-pro-v1:0': 'us.amazon.nova-pro-v1:0',
+  'amazon.nova-2-pro-v1:0': 'us.amazon.nova-2-pro-v1:0',
+  'us.amazon.nova-2-pro-v1:0': 'us.amazon.nova-2-pro-v1:0',
   'amazon.nova-2-lite-v1:0': 'us.amazon.nova-2-lite-v1:0',
+  'us.amazon.nova-2-lite-v1:0': 'us.amazon.nova-2-lite-v1:0',
+  'amazon.nova-lite-v1:0': 'us.amazon.nova-lite-v1:0',
+  'us.amazon.nova-lite-v1:0': 'us.amazon.nova-lite-v1:0',
+  'amazon.nova-micro-v1:0': 'us.amazon.nova-micro-v1:0',
+  'us.amazon.nova-micro-v1:0': 'us.amazon.nova-micro-v1:0',
   'meta.llama3-3-70b-instruct-v1:0': 'us.meta.llama3-3-70b-instruct-v1:0',
   'us.meta.llama3-3-70b-instruct-v1:0': 'us.meta.llama3-3-70b-instruct-v1:0',
   'meta.llama4-scout-17b-instruct-v1:0': 'us.meta.llama4-scout-17b-instruct-v1:0',
@@ -209,10 +216,32 @@ const CURATED_ACTIVE_MODELS: ActiveBedrockModel[] = [
     isLegacy: false,
   },
   {
+    modelId: 'amazon.nova-2-pro-v1:0',
+    modelName: 'Amazon Nova 2 Pro',
+    providerName: 'Amazon',
+    inferenceProfileId: 'us.amazon.nova-2-pro-v1:0',
+    supportsPromptCaching: true,
+    inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
+    outputModalities: ['TEXT'],
+    status: 'ACTIVE',
+    isLegacy: false,
+  },
+  {
     modelId: 'amazon.nova-2-lite-v1:0',
     modelName: 'Amazon Nova 2 Lite',
     providerName: 'Amazon',
     inferenceProfileId: 'us.amazon.nova-2-lite-v1:0',
+    supportsPromptCaching: true,
+    inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
+    outputModalities: ['TEXT'],
+    status: 'ACTIVE',
+    isLegacy: false,
+  },
+  {
+    modelId: 'amazon.nova-lite-v1:0',
+    modelName: 'Amazon Nova Lite',
+    providerName: 'Amazon',
+    inferenceProfileId: 'us.amazon.nova-lite-v1:0',
     supportsPromptCaching: true,
     inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
     outputModalities: ['TEXT'],
@@ -417,7 +446,13 @@ export class BedrockModelCatalog {
    */
   public resolveCrossRegionProfileId(modelId: string): string {
     const active = this.resolveActiveModel(modelId).modelId;
-    return DEFAULT_CROSS_REGION_PROFILES[active] || active;
+    if (DEFAULT_CROSS_REGION_PROFILES[active]) {
+      return DEFAULT_CROSS_REGION_PROFILES[active];
+    }
+    if (active.startsWith('us.') || active.startsWith('eu.') || active.startsWith('apac.')) {
+      return active;
+    }
+    return `us.${active}`;
   }
 
   /**
@@ -428,8 +463,7 @@ export class BedrockModelCatalog {
     return normalized.includes('claude-sonnet') ||
       normalized.includes('claude-opus') ||
       normalized.includes('claude-haiku') ||
-      normalized.includes('nova-pro') ||
-      normalized.includes('nova-2-lite');
+      normalized.includes('nova');
   }
 
   /**

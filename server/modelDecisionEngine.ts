@@ -114,7 +114,26 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
       avgTtftMs: 250,
       tokensPerSecond: 130,
     },
-    strengths: ['Ultra-low cost ($0.06/M)', 'Documentation & changelog synthesis', 'Formatting, typing, and lint triage'],
+    strengths: ['Ultra-low cost ($0.06/M)', 'Fast leaf workers & implementation', 'Documentation & lint triage'],
+  },
+  {
+    id: 'amazon.nova-lite-v1:0',
+    name: 'Amazon Nova Lite',
+    provider: 'Amazon',
+    tier: 1,
+    inferenceProfileId: 'us.amazon.nova-lite-v1:0',
+    supportsPromptCaching: true,
+    supportsToolStreaming: true,
+    pricing: { inputPerMillion: 0.06, outputPerMillion: 0.24 },
+    metrics: {
+      reasoningScore: 72,
+      codingScore: 75,
+      toolProficiency: 80,
+      contextWindowTokens: 300_000,
+      avgTtftMs: 250,
+      tokensPerSecond: 130,
+    },
+    strengths: ['Ultra-low cost ($0.06/M)', 'Documentation & changelog synthesis', 'Auxiliary triage'],
   },
   {
     id: 'anthropic.claude-haiku-4-5-20251001-v1:0',
@@ -164,14 +183,33 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     supportsToolStreaming: true,
     pricing: { inputPerMillion: 0.8, outputPerMillion: 3.2 },
     metrics: {
-      reasoningScore: 82,
-      codingScore: 86,
+      reasoningScore: 85,
+      codingScore: 88,
       toolProficiency: 90,
       contextWindowTokens: 300_000,
       avgTtftMs: 450,
       tokensPerSecond: 95,
     },
     strengths: ['300k token multimodal context', 'Cost-effective general coding', 'Multimodal UI inspection'],
+  },
+  {
+    id: 'us.amazon.nova-2-pro-v1:0',
+    name: 'Amazon Nova 2 Pro',
+    provider: 'Amazon',
+    tier: 3,
+    inferenceProfileId: 'us.amazon.nova-2-pro-v1:0',
+    supportsPromptCaching: true,
+    supportsToolStreaming: true,
+    pricing: { inputPerMillion: 0.8, outputPerMillion: 3.2 },
+    metrics: {
+      reasoningScore: 92,
+      codingScore: 94,
+      toolProficiency: 95,
+      contextWindowTokens: 300_000,
+      avgTtftMs: 480,
+      tokensPerSecond: 90,
+    },
+    strengths: ['Next-gen Nova 2 multimodal reasoning', 'Agentic multi-step planning', 'Deep code synthesis'],
   },
   {
     id: 'us.meta.llama4-maverick-17b-instruct-v1:0',
@@ -345,23 +383,28 @@ export class ModelDecisionEngine {
       complexity = 64;
       tags.push('fast-patch');
     } else if (req.lane === 'full-swarm') {
-      complexity = Math.max(complexity, 82);
+      // In full-swarm, base complexity is moderately elevated, but role specialization governs the ceiling
+      complexity = Math.max(complexity, 76);
       tags.push('full-swarm');
     }
 
-    // Role weighting
+    // Role-based capability tiering ("the best models in the right places")
     if (req.role === 'architect' || req.role === 'planner') {
       complexity = Math.max(complexity, 88);
       tags.push('system-planning');
     } else if (req.role === 'reviewer') {
-      complexity = Math.max(complexity, 82);
+      complexity = Math.max(complexity, 85);
       tags.push('verification-audit');
     } else if (req.role === 'scribe') {
-      complexity = Math.min(complexity, 65);
+      complexity = 45;
       tags.push('documentation');
+    } else if (req.role === 'worker' || req.role === 'coder') {
+      // Scoped leaf workers execute focused implementation tasks
+      complexity = Math.min(complexity, 78);
+      tags.push('leaf-worker');
     }
 
-    // High complexity keywords
+    // High complexity keywords override role baselines when task genuinely requires deep algorithmic reasoning
     if (/\b(distributed|concurrency|race condition|deadlock|consensus|raft|crypto|cryptographic|timing-attack|security audit|vulnerability|zero-day|kernel|assembly|compiler)\b/i.test(text)) {
       complexity = Math.max(complexity, 95);
       tags.push('deep-reasoning');
@@ -383,7 +426,7 @@ export class ModelDecisionEngine {
     }
 
     // Policy profile floor adjustments
-    if (req.policyProfile === 'frontier') {
+    if (req.policyProfile === 'frontier' && req.role !== 'scribe' && req.role !== 'worker') {
       complexity = Math.max(complexity, 90);
       tags.push('frontier-policy');
     }
@@ -651,14 +694,14 @@ export class ModelDecisionEngine {
     const pinnedOverride = process.env.BEDROCK_MODEL_ID || process.env.LYRA_PRIMARY_MODEL;
     if (pinnedOverride) {
       const pinnedProfile = this.findModelProfile(pinnedOverride, catalog);
-      if (pinnedProfile) {
+      if (pinnedProfile && pinnedProfile.tier > current.tier) {
         return {
-          escalated: false,
+          escalated: true,
           budgetExceeded: false,
           previousModel: current,
           selectedModel: pinnedProfile,
           estimatedTurnCostUsd: Number(estimateCost(pinnedProfile).toFixed(5)),
-          reason: `Preserving active Bedrock model ${pinnedProfile.name} (${pinnedProfile.id}) for repair turn.`,
+          reason: `Escalating from ${current.name} to configured primary model ${pinnedProfile.name} for repair turn.`,
         };
       }
     }

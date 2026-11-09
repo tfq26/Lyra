@@ -17,6 +17,8 @@ describe('ModelDecisionEngine Multi-Objective Optimization', () => {
       'anthropic.claude-haiku-4-5-20251001-v1:0',
       'qwen.qwen3-coder-480b-a35b-v1:0',
       'amazon.nova-2-lite-v1:0',
+      'amazon.nova-lite-v1:0',
+      'us.amazon.nova-2-lite-v1:0',
       'us.meta.llama4-maverick-17b-instruct-v1:0',
       'us.meta.llama4-scout-17b-instruct-v1:0',
     ]).toContain(decision.selectedModel.id);

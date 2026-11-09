@@ -34,12 +34,27 @@ export interface StartTeamRunParams {
 }
 
 function parseReviewVerdict(text: string): { approved: boolean; findings: string[] } | null {
-  const body = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+  const codeBlockMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch && codeBlockMatch[1] !== undefined) {
+    cleanText = codeBlockMatch[1].trim();
+  } else {
+    const startIdx = cleanText.indexOf('{');
+    const endIdx = cleanText.lastIndexOf('}');
+    if (startIdx !== -1 && endIdx > startIdx) {
+      cleanText = cleanText.slice(startIdx, endIdx + 1);
+    }
+  }
   try {
-    const parsed = JSON.parse(body) as { approved?: unknown; findings?: unknown };
-    if (typeof parsed.approved !== 'boolean' || !Array.isArray(parsed.findings)) return null;
-    return { approved: parsed.approved, findings: parsed.findings.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 24) };
-  } catch { return null; }
+    const parsed = JSON.parse(cleanText) as { approved?: unknown; findings?: unknown };
+    if (typeof parsed.approved !== 'boolean') return null;
+    const findings = Array.isArray(parsed.findings)
+      ? parsed.findings.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 24)
+      : [];
+    return { approved: parsed.approved, findings };
+  } catch {
+    return null;
+  }
 }
 
 export class TeamCoordinator extends EventEmitter {
@@ -816,6 +831,65 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
 
       const verificationContext = { previewUrl, objective, runId };
 
+      // Helper to run code review on current integration state
+      const runReviewCheck = async (attemptNumber: number): Promise<{ approved: boolean; findings: string[] } | null> => {
+        if (signal.aborted) return null;
+        this.setRunStage(sessionId, runId, 'reviewing', 'reviewing');
+        this.store.appendEvent(sessionId, {
+          agent: reviewerAgent,
+          type: 'status',
+          payload: { text: `[Reviewer: ${teamConfig.reviewer}] Running code review on current revision...` },
+          runId,
+        });
+
+        const currentDiff = await this.worktreeManager.getWorktreeDiff(repoPath, verifiedIntegrationCwd, baseCommit);
+        this.store.updateRun(sessionId, runId, { diffs: currentDiff.filesChanged });
+        this.emit('diffs_updated', { sessionId, runId, diffs: currentDiff.filesChanged });
+
+        const reviewPrompt = `You are the independent code reviewer. Return JSON only: {"approved": boolean, "findings": ["specific actionable issue"]}.
+Objective: ${objective}
+Acceptance Criteria:
+${criteria.map((c) => `- ${c}`).join('\n')}
+Integrated diff:
+\`\`\`diff
+${currentDiff.diff.slice(0, 12000)}
+\`\`\``;
+
+        try {
+          const reviewerModel =
+            reviewerProfile?.model ||
+            teamConfig.reviewerModel ||
+            resolveOptimalModel({ prompt: objective, role: 'reviewer', lane: 'full-swarm', policyProfile }).modelId;
+
+          const reviewResult = await this.processManager.runAgent({
+            agentType: reviewerAgent,
+            model: reviewerModel,
+            prompt: reviewPrompt,
+            cwd: verifiedIntegrationCwd,
+            sessionId,
+            runId,
+            processId: `${runId}:reviewer:${attemptNumber}`,
+            executionMode: 'safe',
+          });
+          const verdict = parseReviewVerdict(reviewResult.fullContent);
+          if (verdict) {
+            this.store.addCheckToRun(sessionId, runId, {
+              id: `review-${runId}`,
+              runId,
+              name: 'Independent code review',
+              command: 'Reviewer verdict',
+              status: verdict.approved ? 'passed' : 'failed',
+              exitCode: verdict.approved ? 0 : 1,
+              evidence: verdict.findings.join('\n') || (verdict.approved ? 'Reviewer approved all acceptance criteria.' : 'Advisory findings noted.'),
+            });
+            return verdict;
+          }
+        } catch (err) {
+          console.warn('[TeamCoordinator] Reviewer check completed with advisory notice:', err);
+        }
+        return null;
+      };
+
       let checkResults = await this.verificationRunner.runAllChecks(
         discoveredChecks,
         integrationCwd,
@@ -825,7 +899,10 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
         verificationContext
       );
 
-      // Bounded repair loop if checks fail — with automatic 1-tier escalation & FinOps spend cap
+      // If automated checks passed initially, run code review
+      let reviewVerdict = checkResults.allPassed ? await runReviewCheck(0) : null;
+
+      // Bounded self-repair loop: runs if automated checks fail OR reviewer rejected with findings
       const maxRepairs = run.maxRepairAttempts ?? 2;
       let repairCount = this.store.getRun(sessionId, runId)?.repairAttempts || 0;
       let currentRepairModel =
@@ -834,7 +911,7 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
       let accruedRunSpendUsd = this.store.getRun(sessionId, runId)?.usage?.estimatedCostUsd || 0.01;
       let escalatedDuringRun = false;
 
-      while (!checkResults.allPassed && repairCount < maxRepairs && !signal.aborted) {
+      while ((!checkResults.allPassed || (reviewVerdict && !reviewVerdict.approved)) && repairCount < maxRepairs && !signal.aborted) {
         const remainingBudgetUsd = maxRunBudgetUsd - accruedRunSpendUsd;
         const escalation = ModelDecisionEngine.escalateModelForRepair({
           currentModelId: currentRepairModel,
@@ -861,22 +938,34 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
         this.store.updateRun(sessionId, runId, { repairAttempts: repairCount });
 
         const failedChecks = checkResults.results.filter((c) => c.status !== 'passed');
-        const failureEvidence = failedChecks.map((c) => `Check: ${c.name}\nCommand: ${c.command}\nEvidence / Output:\n${c.evidence || c.output || ''}`).join('\n---\n');
+        const failureEvidence = failedChecks.length > 0
+          ? failedChecks.map((c) => `Check: ${c.name}\nCommand: ${c.command}\nEvidence / Output:\n${c.evidence || c.output || ''}`).join('\n---\n')
+          : '';
+
+        const reviewEvidence = (reviewVerdict && !reviewVerdict.approved && reviewVerdict.findings.length > 0)
+          ? `Adversarial Code Review Rejections:\n${reviewVerdict.findings.map((f) => `- ${f}`).join('\n')}`
+          : '';
+
+        const fullEvidence = [failureEvidence, reviewEvidence].filter(Boolean).join('\n\n');
 
         this.store.appendEvent(sessionId, {
           agent: workerAgent,
           type: 'status',
           payload: {
-            text: `[Repair Loop ${repairCount}/${maxRepairs}] ${escalation.reason} Fixing failing checks on integrated revision...`,
+            text: `[Repair Loop ${repairCount}/${maxRepairs}] ${escalation.reason} Fixing issues on integrated revision...`,
           },
           runId,
         });
 
-        const repairPrompt = `The verification checks failed on the integrated revision.
-Failing Checks:
-${failureEvidence}
+        const repairPrompt = `The verification checks or independent code review identified issues on the integrated revision:
 
-Please investigate and fix the code in this workspace so all checks pass.`;
+${fullEvidence}
+
+Objective: ${objective}
+Acceptance Criteria:
+${criteria.map((c) => `- ${c}`).join('\n')}
+
+Please investigate and fix the code in this workspace so all checks pass and all reviewer findings are cleanly resolved. Do not introduce uninstalled dependencies.`;
 
         const isNativeRepair = workerAgent === 'orchestrator' || !this.processManager.getCapabilities()[workerAgent]?.installed;
         if (isNativeRepair && this.nativeRuntime) {
@@ -901,7 +990,6 @@ Please investigate and fix the code in this workspace so all checks pass.`;
           });
         }
 
-
         await this.worktreeManager.commitWorktreeChanges(integrationCwd, `Lyra: Integrated repair attempt ${repairCount}`);
 
         checkResults = await this.verificationRunner.runAllChecks(
@@ -912,67 +1000,27 @@ Please investigate and fix the code in this workspace so all checks pass.`;
           },
           verificationContext
         );
+
+        if (checkResults.allPassed) {
+          reviewVerdict = await runReviewCheck(repairCount);
+        }
       }
 
       if (previewUrl) {
         this.previewManager.stopPreview(runId);
       }
 
-      // 5. Stage 4: Single-Pass Reviewer Sanity Check (Advisory/Verification)
-      if (signal.aborted) return;
-      this.setRunStage(sessionId, runId, 'reviewing', 'reviewing');
-      this.store.appendEvent(sessionId, {
-        agent: reviewerAgent,
-        type: 'status',
-        payload: { text: `[Reviewer: ${teamConfig.reviewer}] Running code review on verified revision...` },
-        runId,
-      });
-
-      const finalIntegratedDiff = await this.worktreeManager.getWorktreeDiff(repoPath, integrationCwd, baseCommit);
-      this.store.updateRun(sessionId, runId, { diffs: finalIntegratedDiff.filesChanged });
-      this.emit('diffs_updated', { sessionId, runId, diffs: finalIntegratedDiff.filesChanged });
-
-      const reviewPrompt = `You are the independent code reviewer. Return JSON only: {"approved": boolean, "findings": ["specific actionable issue"]}.
-Objective: ${objective}
-Acceptance Criteria:
-${criteria.map((c) => `- ${c}`).join('\n')}
-Integrated diff:
-\`\`\`diff
-${finalIntegratedDiff.diff.slice(0, 12000)}
-\`\`\``;
-
-      try {
-        const reviewResult = await this.processManager.runAgent({
-          agentType: reviewerAgent,
-          model: reviewerProfile?.model || teamConfig.reviewerModel || resolveOptimalModel({ prompt: objective, role: 'reviewer' }).modelId,
-          prompt: reviewPrompt,
-          cwd: integrationCwd,
-          sessionId,
-          runId,
-          processId: `${runId}:reviewer`,
-          executionMode: 'safe',
-        });
-        const verdict = parseReviewVerdict(reviewResult.fullContent);
-        if (verdict) {
-          const passed = verdict.approved || checkResults.allPassed;
-          this.store.addCheckToRun(sessionId, runId, {
-            id: `review-${runId}`,
-            runId,
-            name: 'Independent code review',
-            command: 'Reviewer verdict',
-            status: passed ? 'passed' : 'failed',
-            exitCode: passed ? 0 : 1,
-            evidence: verdict.findings.join('\n') || (verdict.approved ? 'Reviewer approved all acceptance criteria.' : 'Advisory findings noted.'),
-          });
-        }
-      } catch (err) {
-        console.warn('[TeamCoordinator] Reviewer check completed with advisory notice:', err);
+      // If checks passed and review hasn't been conducted yet, conduct review
+      if (checkResults.allPassed && !reviewVerdict && !signal.aborted) {
+        reviewVerdict = await runReviewCheck(repairCount);
       }
 
       // Update final diffs
       const postReviewDiff = await this.worktreeManager.getWorktreeDiff(repoPath, integrationCwd, baseCommit);
       this.store.updateRun(sessionId, runId, { diffs: postReviewDiff.filesChanged });
       this.emit('diffs_updated', { sessionId, runId, diffs: postReviewDiff.filesChanged });
+
+      const allChecksAndReviewPassed = checkResults.allPassed && (!reviewVerdict || reviewVerdict.approved);
 
       // Final Terminal State (Scribe runs asynchronously off the critical path so completion is immediate!)
       const swarmModelProfile = ModelDecisionEngine.findModelProfile(currentRepairModel);
@@ -996,10 +1044,10 @@ ${finalIntegratedDiff.diff.slice(0, 12000)}
         failoverCount: 0,
         escalatedTier: escalatedDuringRun,
         throttled: false,
-        succeeded: checkResults.allPassed,
+        succeeded: allChecksAndReviewPassed,
       });
 
-      if (checkResults.allPassed) {
+      if (allChecksAndReviewPassed) {
         this.setRunStage(sessionId, runId, 'completed', 'completed');
         this.saveRunCheckpoint(sessionId, runId, 'completed', 'completed');
         this.store.updateRun(sessionId, runId, {
@@ -1048,12 +1096,12 @@ ${finalIntegratedDiff.diff.slice(0, 12000)}
       } else {
         this.setRunStage(sessionId, runId, 'needs-attention', 'needs-attention');
         this.store.updateRun(sessionId, runId, {
-          summary: `Team run completed implementation and review, but ${checkResults.results.filter(c => c.status !== 'passed').length} check(s) failed after ${repairCount} repair attempt(s).`,
+          summary: `Team run completed implementation and review, but ${!checkResults.allPassed ? `${checkResults.results.filter(c => c.status !== 'passed').length} check(s)` : 'code review'} failed after ${repairCount} repair attempt(s).`,
         });
         this.store.appendEvent(sessionId, {
           agent: 'orchestrator',
           type: 'status',
-          payload: { text: `⚠️ Team Run ${runId} requires attention: Verification checks failed.` },
+          payload: { text: `⚠️ Team Run ${runId} requires attention: Verification checks or code review failed.` },
           runId,
         });
       }

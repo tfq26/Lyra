@@ -29,6 +29,7 @@ describe('Lyra v1.3 Adaptive 3-Lane Pipeline, Pareto Failover & AWS Well-Archite
     try {
       fs.rmSync(tempWorkspace, { recursive: true, force: true });
     } catch {}
+    cloudWatchTelemetry.reset();
   });
 
   describe('1. 3-Lane Sub-Millisecond Intent Triage', () => {
@@ -118,6 +119,7 @@ describe('Lyra v1.3 Adaptive 3-Lane Pipeline, Pareto Failover & AWS Well-Archite
         throttled: false,
         succeeded: true,
       });
+      cloudWatchTelemetry.reset();
     });
 
     it('escalates 1 capability tier upward on verification failure and enforces FinOps spend cap', () => {
