@@ -965,7 +965,11 @@ Objective: ${objective}
 Acceptance Criteria:
 ${criteria.map((c) => `- ${c}`).join('\n')}
 
-Please investigate and fix the code in this workspace so all checks pass and all reviewer findings are cleanly resolved. Do not introduce uninstalled dependencies.`;
+Please investigate and fix the code in this workspace so all checks pass and all reviewer findings are cleanly resolved.
+Instructions:
+1. Always call read_file on any file you need to modify before calling edit_file, so you see the exact current contents and indentation.
+2. To remove unused imports or lines, call edit_file with replacement: "".
+3. Do not introduce uninstalled dependencies.`;
 
         const isNativeRepair = workerAgent === 'orchestrator' || !this.processManager.getCapabilities()[workerAgent]?.installed;
         if (isNativeRepair && this.nativeRuntime) {

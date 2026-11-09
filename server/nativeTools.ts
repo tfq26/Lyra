@@ -315,10 +315,11 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
           target = normalizedTarget;
           replacement = replacement.replace(/\r\n/g, '\n');
         } else {
-          // Line-by-line whitespace-tolerant matching (ignoring trailing whitespace)
           const targetLines = normalizedTarget.split('\n');
           const contentLines = normalizedContent.split('\n');
           let matchIndex = -1;
+
+          // Pass 1: Trailing whitespace tolerance
           for (let i = 0; i <= contentLines.length - targetLines.length; i++) {
             let matches = true;
             for (let j = 0; j < targetLines.length; j++) {
@@ -332,10 +333,30 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
               break;
             }
           }
+
+          // Pass 2: Full leading & trailing whitespace tolerance (handles indentation differences)
+          if (matchIndex === -1) {
+            for (let i = 0; i <= contentLines.length - targetLines.length; i++) {
+              let matches = true;
+              for (let j = 0; j < targetLines.length; j++) {
+                if (contentLines[i + j]?.trim() !== targetLines[j]?.trim()) {
+                  matches = false;
+                  break;
+                }
+              }
+              if (matches) {
+                matchIndex = i;
+                break;
+              }
+            }
+          }
+
           if (matchIndex !== -1) {
-            const before = contentLines.slice(0, matchIndex).join('\n');
-            const after = contentLines.slice(matchIndex + targetLines.length).join('\n');
-            const updated = (before ? before + '\n' : '') + replacement + (after ? '\n' + after : '');
+            const before = contentLines.slice(0, matchIndex);
+            const after = contentLines.slice(matchIndex + targetLines.length);
+            const repLines = replacement ? replacement.replace(/\r\n/g, '\n').split('\n') : [];
+            const resultLines = [...before, ...repLines, ...after];
+            const updated = resultLines.join('\n');
             fs.writeFileSync(file, updated, 'utf8');
             return `Successfully edited ${path.relative(root, file)} (matched with whitespace normalization).`;
           }

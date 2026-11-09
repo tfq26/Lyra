@@ -39,4 +39,32 @@ describe('native project tools', () => {
     const content = await read.invoke({ path: 'src/index.ts' });
     expect(content).toContain('"world"');
   });
+
+  it('tolerates indentation differences and supports clean line deletion in edit_file', async () => {
+    fs.writeFileSync(
+      path.join(root, 'src', 'sample.ts'),
+      'import { unused } from "dep";\n\nexport function test() {\n    const a = 1;\n    return a;\n}\n'
+    );
+    const tools = createNativeTools(root);
+    const edit = tools.find((item) => item.name === 'edit_file')!;
+    const read = tools.find((item) => item.name === 'read_file')!;
+
+    // Test deleting an unused import with whitespace differences
+    await edit.invoke({
+      path: 'src/sample.ts',
+      target: 'import { unused } from "dep";\n',
+      replacement: '',
+    });
+    let content = await read.invoke({ path: 'src/sample.ts' });
+    expect(content).not.toContain('unused');
+
+    // Test replacing indented code with unindented target
+    await edit.invoke({
+      path: 'src/sample.ts',
+      target: 'const a = 1;\nreturn a;',
+      replacement: '    return 42;',
+    });
+    content = await read.invoke({ path: 'src/sample.ts' });
+    expect(content).toContain('return 42;');
+  });
 });

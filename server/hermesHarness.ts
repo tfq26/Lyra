@@ -216,7 +216,7 @@ Rules:
       // 6. Run agent stream
       const stream = agent.stream(prompt, {
         cancelSignal: signal,
-        limits: { turns: 60 },
+        limits: { turns: 35 },
       });
 
       while (true) {
