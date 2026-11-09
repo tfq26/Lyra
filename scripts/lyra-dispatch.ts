@@ -91,6 +91,7 @@ async function main() {
       model: { type: 'string', short: 'm', default: 'auto' },
       workspace: { type: 'string', short: 'C', default: process.cwd() },
       'auto-merge': { type: 'boolean', default: false },
+      force: { type: 'boolean', short: 'f', default: true },
       cloudUrl: { type: 'string', default: process.env.LYRA_CLOUD_URL || process.env.LYRA_HUB_URL },
       apiKey: { type: 'string', default: process.env.LYRA_GATEWAY_API_KEY || 'lyra-harness-default-secret' },
     },
@@ -181,6 +182,19 @@ Options:
   const nativeRuntime = new NativeAgentRuntime(store);
   const teamCoordinator = new TeamCoordinator(store, processManager, nativeRuntime);
   const gateway = new LyraHarnessGateway(store, teamCoordinator, { apiKey: values.apiKey });
+
+  if (values.force) {
+    const norm = path.resolve(workspacePath);
+    for (const session of store.listSessions()) {
+      if (session.workspacePath && path.resolve(session.workspacePath) === norm) {
+        for (const run of store.listRuns(session.id)) {
+          if (['in_progress', 'executing', 'needs-attention'].includes(run.state) || ['planning', 'executing'].includes(run.stage)) {
+            gateway.cancelRun(run.id);
+          }
+        }
+      }
+    }
+  }
 
   const dispatchResult = await gateway.dispatchTask({
     workspacePath,

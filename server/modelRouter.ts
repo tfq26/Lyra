@@ -76,11 +76,14 @@ export function resolveOptimalModel(ctx: RoutingContext): ModelRouteDecision {
         ? 'balanced'
         : 'frontier');
 
-  // If user pinned a legacy model ID (e.g. claude-3-5-sonnet), upgrade cleanly first
-  const normalizedPinned =
-    ctx.pinnedModelId && ctx.pinnedModelId !== 'auto'
-      ? catalog.resolveActiveModel(ctx.pinnedModelId).modelId
-      : undefined;
+  // If user pinned a model ID or set BEDROCK_MODEL_ID in env, prioritize it
+  const pinnedOrEnv = (ctx.pinnedModelId && ctx.pinnedModelId !== 'auto')
+    ? ctx.pinnedModelId
+    : (process.env.BEDROCK_MODEL_ID || process.env.LYRA_PRIMARY_MODEL);
+
+  const normalizedPinned = pinnedOrEnv
+    ? catalog.resolveActiveModel(pinnedOrEnv).modelId
+    : undefined;
 
   const req: TaskRequirement = {
     prompt: promptText || 'Software implementation task',

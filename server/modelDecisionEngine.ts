@@ -648,6 +648,21 @@ export class ModelDecisionEngine {
       };
     }
 
+    const pinnedOverride = process.env.BEDROCK_MODEL_ID || process.env.LYRA_PRIMARY_MODEL;
+    if (pinnedOverride) {
+      const pinnedProfile = this.findModelProfile(pinnedOverride, catalog);
+      if (pinnedProfile) {
+        return {
+          escalated: false,
+          budgetExceeded: false,
+          previousModel: current,
+          selectedModel: pinnedProfile,
+          estimatedTurnCostUsd: Number(estimateCost(pinnedProfile).toFixed(5)),
+          reason: `Preserving active Bedrock model ${pinnedProfile.name} (${pinnedProfile.id}) for repair turn.`,
+        };
+      }
+    }
+
     const targetTier = Math.min(4, current.tier + 1) as CapabilityTier;
     const higherCandidates = catalog
       .filter((m) => m.tier >= targetTier && m.id !== current.id)
