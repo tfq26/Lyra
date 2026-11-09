@@ -446,6 +446,9 @@ export class BedrockModelCatalog {
    */
   public resolveCrossRegionProfileId(modelId: string): string {
     const active = this.resolveActiveModel(modelId).modelId;
+    if (active.includes('/')) {
+      return active;
+    }
     if (DEFAULT_CROSS_REGION_PROFILES[active]) {
       return DEFAULT_CROSS_REGION_PROFILES[active];
     }

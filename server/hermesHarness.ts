@@ -59,13 +59,23 @@ export class StrandsHarness extends EventEmitter {
     const defaultRegion = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
     const targetModelId = customModelId || 'us.amazon.nova-pro-v1:0';
 
-    if (profile?.provider === 'openrouter') {
-      const secret = await loadProviderCredential(profile);
-      if (!secret.apiKey) throw new Error('OpenRouter API credentials missing.');
+    const isOpenRouter = profile?.provider === 'openrouter' ||
+      targetModelId.includes('/') ||
+      targetModelId.startsWith('openrouter:');
+
+    if (isOpenRouter) {
+      const cleanModelId = targetModelId.replace(/^openrouter:/, '');
+      const secret = profile ? await loadProviderCredential(profile).catch(() => ({} as any)) : {};
+      const apiKey = secret.apiKey || process.env.OPENROUTER_API_KEY || process.env.LYRA_MANAGED_OPENROUTER_API_KEY;
+
+      if (!apiKey) {
+        throw new Error(`OpenRouter API key is missing. Set OPENROUTER_API_KEY to use '${cleanModelId}'.`);
+      }
+
       return new OpenAIModel({
         api: 'chat',
-        modelId: targetModelId,
-        apiKey: secret.apiKey,
+        modelId: cleanModelId,
+        apiKey,
         maxTokens: 8192,
         temperature: 0.2,
         clientConfig: { baseURL: 'https://openrouter.ai/api/v1' },

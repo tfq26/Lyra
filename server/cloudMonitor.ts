@@ -134,6 +134,12 @@ export class CloudMonitor extends EventEmitter {
    * Resolves pricing rates for a given model ID.
    */
   public getModelPricing(modelId: string): { name: string; inputPerMillion: number; outputPerMillion: number } {
+    if (modelId.includes(':free')) {
+      return { name: `${modelId} (Free)`, inputPerMillion: 0, outputPerMillion: 0 };
+    }
+    if (modelId.includes('muse-spark')) {
+      return { name: 'Meta Muse Spark', inputPerMillion: 0.8, outputPerMillion: 3.2 };
+    }
     return BEDROCK_RATES[modelId] || { name: modelId, inputPerMillion: 0.06, outputPerMillion: 0.24 };
   }
 
