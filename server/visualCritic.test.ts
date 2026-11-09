@@ -112,10 +112,14 @@ describe('VisualCritic & Verification Loop', () => {
 
   it('VerificationRunner discovers visual critique check when frontend files are modified', () => {
     const runner = new VerificationRunner();
-    const checks = runner.discoverProjectChecks(process.cwd(), [
-      'site/src/pages/Home.tsx',
-      'site/src/components/Cockpit.tsx',
-    ]);
+    const checks = runner.discoverProjectChecks(
+      process.cwd(),
+      [
+        'site/src/pages/Home.tsx',
+        'site/src/components/Cockpit.tsx',
+      ],
+      { includeVisual: true }
+    );
 
     const visualCheck = checks.find((c) => c.command === 'lyra visual-critique');
     expect(visualCheck).toBeDefined();
@@ -124,10 +128,14 @@ describe('VisualCritic & Verification Loop', () => {
 
   it('VerificationRunner does not add visual critique check for pure backend changes', () => {
     const runner = new VerificationRunner();
-    const checks = runner.discoverProjectChecks(process.cwd(), [
-      'server/bedrockGuardrails.ts',
-      'server/unifiedStore.ts',
-    ]);
+    const checks = runner.discoverProjectChecks(
+      process.cwd(),
+      [
+        'server/bedrockGuardrails.ts',
+        'server/unifiedStore.ts',
+      ],
+      { includeVisual: true }
+    );
 
     const visualCheck = checks.find((c) => c.command === 'lyra visual-critique');
     expect(visualCheck).toBeUndefined();

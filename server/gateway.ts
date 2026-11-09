@@ -297,10 +297,10 @@ export class LyraHarnessGateway {
       }
     }
 
-    // 2. Worker Concurrency Hard Ceiling: Maximum 4 parallel workers
-    const rawWorkers = params.teamConfig?.workers || ['hermes', 'hermes'];
+    // 2. Worker Concurrency Hard Ceiling: Maximum 4 parallel workers (default to single sequential worker)
+    const rawWorkers = params.teamConfig?.workers || ['hermes'];
     const safeWorkers = (Array.isArray(rawWorkers) ? rawWorkers : [rawWorkers]).slice(0, 4);
-    const safeConcurrency = Math.min(Math.max(params.teamConfig?.concurrencyLimit || 4, 1), 4);
+    const safeConcurrency = Math.min(Math.max(params.teamConfig?.concurrencyLimit || 1, 1), 4);
 
     const sessionId = params.sessionId || `session-harness-${Date.now()}`;
     const runId = `run-harness-${Date.now()}`;

@@ -22,39 +22,47 @@ export class VerificationRunner {
     };
   }
 
-  public discoverProjectChecks(cwd: string, changedFiles?: (string | { filename: string })[]): CheckItem[] {
+  public discoverProjectChecks(
+    cwd: string,
+    changedFiles?: (string | { filename: string })[],
+    options?: { includeCanary?: boolean; includeVisual?: boolean }
+  ): CheckItem[] {
     const checks: CheckItem[] = [];
 
-    // Check for database migration canary
-    const canary = new MigrationCanary();
-    const hasMigrations = (changedFiles && changedFiles.some((f) => canary.isMigrationFile(typeof f === 'string' ? f : f.filename))) ||
-      fs.existsSync(path.join(cwd, 'prisma/migrations')) ||
-      fs.existsSync(path.join(cwd, 'migrations')) ||
-      fs.existsSync(path.join(cwd, 'db/migrations')) ||
-      fs.existsSync(path.join(cwd, 'kysely/migrations'));
+    // Check for database migration canary (opt-in only to avoid spurious container/docker spinups)
+    if (options?.includeCanary) {
+      const canary = new MigrationCanary();
+      const hasMigrations = (changedFiles && changedFiles.some((f) => canary.isMigrationFile(typeof f === 'string' ? f : f.filename))) ||
+        fs.existsSync(path.join(cwd, 'prisma/migrations')) ||
+        fs.existsSync(path.join(cwd, 'migrations')) ||
+        fs.existsSync(path.join(cwd, 'db/migrations')) ||
+        fs.existsSync(path.join(cwd, 'kysely/migrations'));
 
-    if (hasMigrations) {
-      checks.push({
-        id: `check-migration-canary-${Date.now()}`,
-        runId: '',
-        name: 'Database Migration Canary',
-        command: 'lyra canary database-migrations',
-        status: 'pending',
-      });
+      if (hasMigrations) {
+        checks.push({
+          id: `check-migration-canary-${Date.now()}`,
+          runId: '',
+          name: 'Database Migration Canary',
+          command: 'lyra canary database-migrations',
+          status: 'pending',
+        });
+      }
     }
 
-    // Check for frontend visual critique
-    const isFrontendFile = (file: string) => /\.(tsx|jsx|html|css|vue|svelte)$/i.test(file);
-    const touchesFrontend = Boolean(changedFiles && changedFiles.some((f) => isFrontendFile(typeof f === 'string' ? f : f.filename)));
+    // Check for frontend visual critique (opt-in only to avoid headless browser/preview overhead)
+    if (options?.includeVisual) {
+      const isFrontendFile = (file: string) => /\.(tsx|jsx|html|css|vue|svelte)$/i.test(file);
+      const touchesFrontend = Boolean(changedFiles && changedFiles.some((f) => isFrontendFile(typeof f === 'string' ? f : f.filename)));
 
-    if (touchesFrontend) {
-      checks.push({
-        id: `check-visual-critique-${Date.now()}`,
-        runId: '',
-        name: 'Visual Design & Layout Critique',
-        command: 'lyra visual-critique',
-        status: 'pending',
-      });
+      if (touchesFrontend) {
+        checks.push({
+          id: `check-visual-critique-${Date.now()}`,
+          runId: '',
+          name: 'Visual Design & Layout Critique',
+          command: 'lyra visual-critique',
+          status: 'pending',
+        });
+      }
     }
 
     // Check for package.json

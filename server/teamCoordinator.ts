@@ -226,7 +226,7 @@ export class TeamCoordinator extends EventEmitter {
     if ([...this.activeRuns.values()].some((active) => active.sessionId === params.sessionId)) {
       throw new Error('This conversation already has an active run. Wait for it to finish or stop it before starting another.');
     }
-    const concurrencyLimit = params.concurrencyLimit ?? params.teamConfig.concurrencyLimit ?? 4;
+    const concurrencyLimit = params.concurrencyLimit ?? params.teamConfig?.concurrencyLimit ?? 1;
     if (!Number.isInteger(concurrencyLimit) || Number(concurrencyLimit) < 1 || Number(concurrencyLimit) > 32) {
       throw new Error('Choose a worker concurrency limit between 1 and 32 before starting a swarm.');
     }
@@ -633,7 +633,83 @@ At completion, report changes, decisions, blockers, and any handoff in a concise
         }
 
         const attemptEnd = new Date().toISOString();
-        const success = workerResult.code === 0 && !workerResult.cancelled && !workerResult.error;
+        let success = workerResult.code === 0 && !workerResult.cancelled && !workerResult.error;
+
+        // Compile Gate: verify the task left the project in a buildable/compiling state before accepting
+        if (success) {
+          const checks = this.verificationRunner.discoverProjectChecks(taskCwd);
+          const buildChecks = checks.filter((c) =>
+            c.command.includes('build') ||
+            c.command.includes('tsc') ||
+            c.command.includes('cargo check') ||
+            c.name.toLowerCase().includes('typecheck')
+          );
+
+          for (const buildCheck of buildChecks) {
+            const checkRes = await this.verificationRunner.runCheck(buildCheck, taskCwd);
+            if (checkRes.status === 'failed') {
+              console.warn(`[TeamCoordinator] Worker task "${task.title}" failed compile gate check "${buildCheck.name}":`, checkRes.evidence);
+
+              this.store.appendEvent(sessionId, {
+                agent: task.assignedAgent,
+                type: 'status',
+                payload: { text: `⚠️ Build check "${buildCheck.name}" failed after changes. Attempting inline self-repair...` },
+                runId,
+              });
+
+              const repairPrompt = `The implementation of task "${task.title}" caused a compile/build failure:
+Check: ${buildCheck.name}
+Command: ${buildCheck.command}
+Compiler Error:
+${(checkRes.evidence || checkRes.output || '').slice(-2000)}
+
+Please inspect the affected files, fix the compilation or syntax errors, and ensure the project builds cleanly.
+Do not introduce duplicate definitions or uninstalled dependencies.`;
+
+              let repairRes: { code: number; fullContent?: string; error?: string } = { code: 1 };
+              if (isNative && this.nativeRuntime) {
+                repairRes = await this.nativeRuntime.runTask({
+                  sessionId,
+                  runId,
+                  taskId: `${task.id}-compile-repair`,
+                  prompt: repairPrompt,
+                  workspacePath: taskCwd,
+                  providerProfileId: task.assignedProfileId,
+                  signal,
+                });
+              } else {
+                repairRes = await this.processManager.runAgent({
+                  agentType: task.assignedAgent,
+                  model: task.assignedModel,
+                  prompt: repairPrompt,
+                  cwd: taskCwd,
+                  sessionId,
+                  runId,
+                  processId: `${attemptId}-compile-repair`,
+                  executionMode: 'sandboxed',
+                });
+              }
+
+              const retryRes = await this.verificationRunner.runCheck(buildCheck, taskCwd);
+              if (retryRes.status === 'failed') {
+                success = false;
+                workerResult = {
+                  code: 1,
+                  error: `Compile gate failed for ${buildCheck.name}: ${(retryRes.evidence || retryRes.output || '').slice(0, 500)}`,
+                  fullContent: `${workerResult.fullContent || ''}\n\n[Compile Gate Failure]\n${retryRes.evidence || retryRes.output || ''}`,
+                };
+                break;
+              } else {
+                this.store.appendEvent(sessionId, {
+                  agent: task.assignedAgent,
+                  type: 'status',
+                  payload: { text: `✅ Inline self-repair succeeded! Build check "${buildCheck.name}" passed.` },
+                  runId,
+                });
+              }
+            }
+          }
+        }
 
         const attempt = {
           id: attemptId,
