@@ -8,6 +8,7 @@
     "doctor": "bun scripts/lyra-doctor.ts",
     "dispatch": "bun scripts/lyra-dispatch.ts",
     "sync": "bun scripts/lyra-sync.ts",
+    "horizon:scout": "bun scripts/lyra-horizon-scout.ts",
     "nightshift": "bun scripts/lyra-nightshift.ts",
     "benchmark:pulse": "bun scripts/run-pulse-benchmark.ts",
     "deploy:aws": "bash scripts/deploy-aws-runner.sh",
