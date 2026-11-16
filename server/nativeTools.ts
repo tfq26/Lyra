@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { tool } from '@strands-agents/sdk';
+import { buildSafeSubprocessEnv, redactSecretText } from './security';
 
 export const blockedDirectories = new Set([
   '.aws', '.ssh', '.claude', '.codex', '.lyra', '.hermes', 'node_modules', '.git',
@@ -81,17 +82,7 @@ export function killAllActiveProcesses(): void {
 }
 
 function safeEnvironment(cwd: string): NodeJS.ProcessEnv {
-  const home = process.env.HOME || os.homedir();
-  const localBin = path.join(cwd, 'node_modules', '.bin');
-  const baseEnv = process.env.PATH || '';
-  return {
-    ...process.env,
-    PATH: `${localBin}:${baseEnv}`,
-    HOME: home,
-    TMPDIR: process.env.TMPDIR || '/tmp',
-    LANG: process.env.LANG || 'C.UTF-8',
-    CI: '1',
-  };
+  return buildSafeSubprocessEnv(cwd);
 }
 
 export function runProcess(command: string, cwd: string, timeoutMs = 180_000, signal?: AbortSignal): Promise<string> {
@@ -180,9 +171,24 @@ function commandNeedsApproval(command: string): boolean {
     || /(^|\s)(npm|bun|pnpm|yarn|pip|uv|cargo)\s+(install|add|remove|uninstall|publish)(\s|$)/i.test(c);
 }
 
+export type NativeToolGroup = 'core' | 'git' | 'execution' | 'all';
+
 export interface NativeToolHooks {
   onToolEvent?: (event: { name: string; input: unknown; output?: string; status: 'running' | 'completed' | 'failed' }) => void | Promise<void>;
   signal?: AbortSignal;
+  toolGroups?: NativeToolGroup[];
+}
+
+export function inferNativeToolGroupsFromPrompt(prompt: string): NativeToolGroup[] {
+  const lower = prompt.toLowerCase();
+  const groups: NativeToolGroup[] = ['core'];
+  if (/\b(git|diff|status|commit|branch|merge|patch|rebase|pr)\b/.test(lower)) {
+    groups.push('git');
+  }
+  if (/\b(test|build|lint|typecheck|tsc|bun|npm|pnpm|yarn|cargo|pytest|run|verify|check|server|start|install)\b/.test(lower)) {
+    groups.push('execution');
+  }
+  return groups;
 }
 
 export function createNativeTools(workspacePath: string, hooks: NativeToolHooks = {}) {
@@ -198,7 +204,8 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
     await hooks.onToolEvent?.({ name, input: safeInput, status: 'running' });
     try {
       const output = await callback(input as never);
-      const text = typeof output === 'string' ? output : JSON.stringify(output);
+      const rawText = typeof output === 'string' ? output : JSON.stringify(output);
+      const text = redactSecretText(rawText);
       const summary = ['read_file', 'search_files', 'git_diff', 'run_check', 'run_command'].includes(name) ? `Completed (${text.length} characters).` : text.slice(0, 1000);
       await hooks.onToolEvent?.({ name, input: safeInput, output: summary, status: 'completed' });
       return text;
@@ -297,7 +304,11 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
       } catch (error: any) {
         if (error?.status === 1) return 'No matches found.';
         try {
-          return execFileSync('git', ['grep', '-n', '--fixed-strings', '-e', query, '--', '.'], {
+          return execFileSync('git', [
+            'grep', '-n', '--fixed-strings', '-e', query, '--', '.',
+            ':(exclude)**/.env*', ':(exclude)**/*.pem', ':(exclude)**/*.key',
+            ':(exclude)**/.aws/**', ':(exclude)**/.ssh/**', ':(exclude)**/.lyra/**',
+          ], {
             cwd: start,
             encoding: 'utf8',
             maxBuffer: 200_000,
@@ -474,7 +485,14 @@ export function createNativeTools(workspacePath: string, hooks: NativeToolHooks 
   });
   const runCommand = tool({ name: 'run_command', description: 'Run a shell command in the project workspace. Lyra requests user approval before execution.', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false }, callback: wrap('run_command', async ({ command }: { command: string }) => await runProcess(command, root, 180_000, hooks.signal)) });
 
-  return [listFiles, readFile, searchFiles, editFile, writeFile, writeFiles, applyPatch, gitStatus, gitDiff, runCheck, runCommand];
+  const groups = new Set<NativeToolGroup>(hooks.toolGroups && hooks.toolGroups.length > 0 ? hooks.toolGroups : ['all']);
+  const includeAll = groups.has('all');
+  const selected = [
+    ...(includeAll || groups.has('core') ? [listFiles, readFile, searchFiles, editFile, writeFile, writeFiles, applyPatch] : []),
+    ...(includeAll || groups.has('git') ? [gitStatus, gitDiff] : []),
+    ...(includeAll || groups.has('execution') ? [runCheck, runCommand] : []),
+  ];
+  return selected;
 }
 
 export function requiresApproval(toolName: string, input: unknown) {

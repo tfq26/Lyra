@@ -20,7 +20,7 @@ import {
   type LaneModePreference,
 } from './intentTriage';
 import { resolveOptimalModel, type ModelRouteDecision } from './modelRouter';
-import { modelCouncil, type HermesMemoryEntry } from './modelCouncil';
+import { modelCouncil, type StrandsMemoryEntry } from './modelCouncil';
 import { sqsTaskQueue } from './sqsTaskQueue';
 import type { UnifiedStore } from './unifiedStore';
 
@@ -60,7 +60,7 @@ export interface AHPSessionSyncDelta {
   sinceSeq: number;
   meta: AHPSession;
   deltaMessages: AHPMessage[];
-  hermesMemory: HermesMemoryEntry[];
+  strandsMemory: StrandsMemoryEntry[];
 }
 
 export interface AHPChatRequest {
@@ -91,6 +91,9 @@ export interface AHPChatResponse {
 export class AHPServer extends EventEmitter {
   private executor: FastLaneExecutor;
   private gateway?: LyraHarnessGateway;
+  private syncSeq = 0;
+  private syncedChats = new Map<string, Map<string, { data: any; deleted: boolean; syncSeq: number }>>();
+  private syncedTasks = new Map<string, Map<string, { data: any; syncSeq: number }>>();
 
   constructor(
     private store: UnifiedStore,
@@ -230,7 +233,7 @@ export class AHPServer extends EventEmitter {
 
   /**
    * Cross-device sequence-delta sync: returns only messages newer than `sinceSeq`
-   * along with accumulated 24/7 Hermes Repo Memory for the workspace.
+   * along with accumulated 24/7 Strands Repo Memory for the workspace.
    */
   public syncSessionDelta(params?: {
     sessionId?: string;
@@ -259,7 +262,7 @@ export class AHPServer extends EventEmitter {
     }
 
     const deltaMessages = session.messages.filter((m) => m.sequence > sinceSeq);
-    const hermesMemory = modelCouncil.listMemoryEntries(session.meta.workspacePath, 10);
+    const strandsMemory = modelCouncil.listMemoryEntries(session.meta.workspacePath, 10);
 
     return {
       sessionId: session.meta.sessionId,
@@ -267,7 +270,7 @@ export class AHPServer extends EventEmitter {
       sinceSeq,
       meta: session.meta,
       deltaMessages,
-      hermesMemory,
+      strandsMemory,
     };
   }
 
@@ -493,6 +496,84 @@ export class AHPServer extends EventEmitter {
       pinnedModelId: params.pinnedModelId,
       finopsMaxBudgetUsd: params.finopsMaxBudgetUsd ?? 1.5,
     });
+  }
+
+  /**
+   * Synchronize chats and task checkpoints across devices using sequence-delta (`sinceSeq`)
+   */
+  public syncChatsAndTasks(
+    userId: string,
+    payload: { sinceSeq?: number; chats?: any[]; tasks?: any[]; deletedChatIds?: string[] }
+  ): { latestSeq: number; chats: any[]; tasks: any[]; deletedChatIds: string[] } {
+    const sinceSeq = Number(payload.sinceSeq || 0);
+    if (!this.syncedChats.has(userId)) this.syncedChats.set(userId, new Map());
+    if (!this.syncedTasks.has(userId)) this.syncedTasks.set(userId, new Map());
+    const userChats = this.syncedChats.get(userId)!;
+    const userTasks = this.syncedTasks.get(userId)!;
+
+    for (const chat of payload.chats || []) {
+      if (!chat?.sessionId) continue;
+      const existing = userChats.get(chat.sessionId);
+      const incomingTime = chat.updatedAt || new Date().toISOString();
+      if (!existing || incomingTime >= (existing.data?.updatedAt || '')) {
+        this.syncSeq += 1;
+        userChats.set(chat.sessionId, {
+          data: { ...chat, updatedAt: incomingTime, syncSeq: this.syncSeq },
+          deleted: false,
+          syncSeq: this.syncSeq,
+        });
+      }
+    }
+
+    for (const cp of payload.tasks || []) {
+      if (!cp?.sessionId || !cp?.runId) continue;
+      const key = `${cp.sessionId}:${cp.runId}`;
+      const existing = userTasks.get(key);
+      if (!existing || (cp.sequence ?? 0) >= (existing.data?.sequence ?? 0)) {
+        this.syncSeq += 1;
+        userTasks.set(key, {
+          data: { ...cp, syncSeq: this.syncSeq },
+          syncSeq: this.syncSeq,
+        });
+      }
+    }
+
+    for (const delId of payload.deletedChatIds || []) {
+      if (!delId) continue;
+      this.syncSeq += 1;
+      userChats.set(delId, {
+        data: { sessionId: delId, updatedAt: new Date().toISOString() },
+        deleted: true,
+        syncSeq: this.syncSeq,
+      });
+      for (const key of userTasks.keys()) {
+        if (key.startsWith(`${delId}:`)) userTasks.delete(key);
+      }
+    }
+
+    const chats: any[] = [];
+    const deletedChatIds: string[] = [];
+    let latestSeq = sinceSeq;
+    for (const [sessionId, entry] of userChats.entries()) {
+      if (entry.syncSeq > latestSeq) latestSeq = entry.syncSeq;
+      if (entry.syncSeq > sinceSeq) {
+        if (entry.deleted) {
+          deletedChatIds.push(sessionId);
+        } else {
+          chats.push(entry.data);
+        }
+      }
+    }
+
+    const tasks: any[] = [];
+    for (const entry of userTasks.values()) {
+      if (entry.syncSeq > latestSeq) latestSeq = entry.syncSeq;
+      if (entry.syncSeq > sinceSeq) {
+        tasks.push(entry.data);
+      }
+    }
+
+    return { latestSeq, chats, tasks, deletedChatIds };
   }
 
   /**

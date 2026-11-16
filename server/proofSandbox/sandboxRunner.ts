@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { WorktreeManager, type WorktreeInfo } from '../worktreeManager';
+import { buildSafeSubprocessEnv, isSecretFilePath } from '../security';
 
 export interface SandboxExecutionReceipt {
   phase: 'reproduction_red' | 'verification_green' | (string & {});
@@ -43,7 +44,8 @@ export class SandboxRunner {
           if (
             filePath.startsWith('.lyra') ||
             filePath.startsWith('node_modules') ||
-            filePath.startsWith('.git')
+            filePath.startsWith('.git') ||
+            isSecretFilePath(filePath)
           ) {
             continue;
           }
@@ -94,12 +96,10 @@ export class SandboxRunner {
       const executable = command === 'bun' && process.execPath.includes('bun') ? process.execPath : command;
       const child = spawn(executable, args, {
         cwd,
-        env: {
-          ...process.env,
-          PATH: `${path.dirname(process.execPath)}:${process.env.PATH || ''}`,
+        env: buildSafeSubprocessEnv(cwd, {
           CI: 'true',
           NODE_ENV: 'test',
-        },
+        }),
       });
 
       const timer = setTimeout(() => {

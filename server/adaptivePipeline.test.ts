@@ -267,8 +267,8 @@ describe('Lyra v1.3 Adaptive 3-Lane Pipeline, Pareto Failover & AWS Well-Archite
     });
   });
 
-  describe('5. Multi-Model Council, 24/7 Hermes Memory & Cross-Device Session Sync', () => {
-    it('executes 3-seat parallel Multi-Model Council analysis and persists distilled 24/7 Hermes Repo Memory', async () => {
+  describe('5. Multi-Model Council, 24/7 Strands Memory & Cross-Device Session Sync', () => {
+    it('executes 3-seat parallel Multi-Model Council analysis and persists distilled 24/7 Strands Repo Memory', async () => {
       fs.writeFileSync(
         path.join(tempWorkspace, 'README.md'),
         '# Architecture\nUses Amazon SQS with S3 Claim-Check offload above 6KB.\n',

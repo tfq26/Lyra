@@ -57,7 +57,7 @@ const pluginManifest = {
   name: 'lyra-harness',
   version: '1.3.0',
   description:
-    'Lyra Multi-Model Council (Pareto Bedrock Selector) & 24/7 Hermes Repo Memory Teammate for DeepSeek Harness Desktop.',
+    'Lyra Multi-Model Council (Pareto Bedrock Selector) & 24/7 Strands Repo Memory Teammate for DeepSeek Harness Desktop.',
   author: {
     name: 'Taufeeq Ali',
     email: 'taufeeq@lyra.dev',
@@ -72,7 +72,7 @@ const pluginManifest = {
     'multi-model-council',
     'pareto-router',
     'rag',
-    'hermes-memory',
+    'strands-memory',
     'cross-device-sync',
   ],
   skills: './skills/',
@@ -81,7 +81,7 @@ const pluginManifest = {
     displayName: 'Lyra Bedrock Council & 24/7 Teammate',
     shortDescription: 'Pareto Multi-Model Council, RAG & Cross-Device Memory',
     longDescription:
-      'Convenes 3 distinct Amazon Bedrock models + a Synthesis Chair (dynamically selected by the Pareto Model Selector) to debate architecture, triangulate bugs, synthesize multi-doc RAG evidence, and maintain 24/7 Hermes Repo Memory across all your devices.',
+      'Convenes 3 distinct Amazon Bedrock models + a Synthesis Chair (dynamically selected by the Pareto Model Selector) to debate architecture, triangulate bugs, synthesize multi-doc RAG evidence, and maintain 24/7 Strands Repo Memory across all your devices.',
     developerName: 'Lyra Engineering',
     category: 'Developer Tools',
     capabilities: ['Interactive', 'Read', 'Write'],
@@ -90,7 +90,7 @@ const pluginManifest = {
     termsOfServiceURL: 'http://localhost:3001/docs',
     defaultPrompt: [
       'Convene the Lyra Multi-Model Council to analyze this repo architecture',
-      'Sync my latest Lyra cross-device chat history and 24/7 Hermes memory',
+      'Sync my latest Lyra cross-device chat history and 24/7 Strands memory',
       'Run a 3-model security and root-cause triangulation on this module',
     ],
     brandColor: '#0284C7',
@@ -130,7 +130,7 @@ Use this skill whenever the user asks to:
    - Which **3 distinct Bedrock models** and **Chair** the Pareto Model Selector chose (and why),
    - **High-Confidence Consensus** across all 3 models,
    - **Cross-Examination & Edge-Case Tension** where the models disagreed,
-   - **Synthesized Solution** and the **24/7 Hermes Repo Memory ID** persisted for future turns.
+   - **Synthesized Solution** and the **24/7 Strands Repo Memory ID** persisted for future turns.
 `;
 
 const councilAgentYaml = `interface:
@@ -148,14 +148,14 @@ fs.writeFileSync(path.join(codexSkillsDir, 'lyra-council', 'agents', 'openai.yam
 
 const teammateSkillMd = `---
 name: lyra-teammate
-description: "Synchronize cross-device chat sessions (sinceSeq), retrieve 24/7 Hermes Repo Memory checkpoints, and dispatch background QA/verification runs via Lyra."
+description: "Synchronize cross-device chat sessions (sinceSeq), retrieve 24/7 Strands Repo Memory checkpoints, and dispatch background QA/verification runs via Lyra."
 ---
 
 # Lyra 24/7 Teammate & Cross-Device Session Sync
 
 Use this skill whenever the user wants to:
 - Resume or sync a chat session from another device (\`lyra_sync_session\`),
-- Inspect learned **24/7 Hermes Repo Memory** insights or handoff briefs (\`lyra_get_handoff\`),
+- Inspect learned **24/7 Strands Repo Memory** insights or handoff briefs (\`lyra_get_handoff\`),
 - Dispatch an autonomous background verification or maintenance run (\`lyra_dispatch_task\`, \`lyra_run_qa_sandbox\`, \`lyra_run_maintenance\`).
 
 ## Workflow
@@ -168,7 +168,7 @@ Use this skill whenever the user wants to:
 const teammateAgentYaml = `interface:
   display_name: "Lyra 24/7 Teammate"
   short_description: "Cross-device session sync, repo memory & background QA"
-  default_prompt: "Use $lyra-teammate to sync my latest cross-device session deltas, check 24/7 Hermes Repo Memory, and prepare a handoff brief."
+  default_prompt: "Use $lyra-teammate to sync my latest cross-device session deltas, check 24/7 Strands Repo Memory, and prepare a handoff brief."
 policy:
   allow_implicit_invocation: true
 `;

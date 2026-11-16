@@ -1,5 +1,5 @@
 /**
- * Lyra Multi-Model Council & Cross-Document RAG Analyzer + 24/7 Hermes Repo Memory
+ * Lyra Multi-Model Council & Cross-Document RAG Analyzer + 24/7 Strands Repo Memory
  *
  * Implements a bounded 2-stage heterogeneous multi-model analysis pipeline on AWS Bedrock
  * where every seat and the Chair are dynamically selected by `ModelDecisionEngine` (the
@@ -39,7 +39,7 @@ export interface CouncilSeatAnalysis {
   durationMs: number;
 }
 
-export interface HermesMemoryEntry {
+export interface StrandsMemoryEntry {
   id: string;
   createdAt: string;
   workspacePath: string;
@@ -71,7 +71,7 @@ export interface CouncilAnalysisResult {
   evidenceCitations: string[];
   recommendedSolution: string;
   formattedMarkdown: string;
-  memoryEntry: HermesMemoryEntry;
+  memoryEntry: StrandsMemoryEntry;
   totalDurationMs: number;
   estimatedCostUsd: number;
 }
@@ -101,7 +101,7 @@ export class ModelCouncilAnalyzer {
 
   constructor(storageRoot?: string) {
     const baseDir = storageRoot || path.join(process.cwd(), 'server', 'data', 'store');
-    this.memoryFilePath = path.join(baseDir, 'hermes-repo-memory.json');
+    this.memoryFilePath = path.join(baseDir, 'strands-repo-memory.json');
   }
 
   private getBedrockClient(): BedrockRuntimeClient {
@@ -421,7 +421,7 @@ export class ModelCouncilAnalyzer {
       ).toFixed(6)
     );
 
-    // Persist distilled insight to 24/7 Hermes Repo Memory
+    // Persist distilled insight to 24/7 Strands Repo Memory
     const memoryEntry = this.saveMemoryEntry({
       workspacePath,
       sessionId: req.sessionId,
@@ -630,7 +630,7 @@ Respond concisely with:
         `Evaluated state divergence risks between cloud git worktrees and local harness working directories.`,
       ],
       hypothesisOrProposal:
-        `Pair chat sequence sync with explicit handoff briefs and learned Hermes repo memory so resuming on a second machine never assumes stale local file state.`,
+        `Pair chat sequence sync with explicit handoff briefs and learned Strands repo memory so resuming on a second machine never assumes stale local file state.`,
       riskOrEdgeCase:
         `If a client reconnects after a long offline gap, replaying only raw tokens without a compacted memory checkpoint can exceed model context budgets.`,
       durationMs: Math.max(1, Date.now() - t0),
@@ -716,7 +716,7 @@ Cross-examine the 3 specialist model briefs and return JSON with keys:
         `Trade-off tension between ${seats[0]!.modelName} (FinOps context compaction: "${seats[0]!.riskOrEdgeCase}") and ${seats[2]!.modelName} (Strict state verification: "${seats[2]!.riskOrEdgeCase}").`,
       ],
       recommendedSolution:
-        `Combine sequence-indexed Cloud Session delta sync ('sinceSeq') with compacted 24/7 Hermes Repo Memory checkpoints. ` +
+        `Combine sequence-indexed Cloud Session delta sync ('sinceSeq') with compacted 24/7 Strands Repo Memory checkpoints. ` +
         `This satisfies ${seats[1]!.modelName}'s single-round-trip hydration across devices, addresses ${seats[2]!.modelName}'s stale-state invariant check, and preserves ${seats[0]!.modelName}'s Bedrock Prompt Caching budget.`,
     };
   }
@@ -760,16 +760,16 @@ Cross-examine the 3 specialist model briefs and return JSON with keys:
       ``,
       params.recommendedSolution,
       ``,
-      `*Persisted to 24/7 Hermes Repo Memory (\`${params.memoryId}\`) · Evidence: ${params.evidenceCitations.map((f) => `\`${f}\``).join(', ') || 'workspace'}*`,
+      `*Persisted to 24/7 Strands Repo Memory (\`${params.memoryId}\`) · Evidence: ${params.evidenceCitations.map((f) => `\`${f}\``).join(', ') || 'workspace'}*`,
     ].join('\n');
   }
 
   /**
-   * Saves a distilled insight to the 24/7 Hermes Repo Memory store so all devices and harnesses
+   * Saves a distilled insight to the 24/7 Strands Repo Memory store so all devices and harnesses
    * share accumulated architectural knowledge.
    */
-  public saveMemoryEntry(input: Omit<HermesMemoryEntry, 'id' | 'createdAt'>): HermesMemoryEntry {
-    const entry: HermesMemoryEntry = {
+  public saveMemoryEntry(input: Omit<StrandsMemoryEntry, 'id' | 'createdAt'>): StrandsMemoryEntry {
+    const entry: StrandsMemoryEntry = {
       id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString(),
       ...input,
@@ -790,13 +790,13 @@ Cross-examine the 3 specialist model briefs and return JSON with keys:
     return entry;
   }
 
-  public listMemoryEntries(workspacePath?: string, limit = 10): HermesMemoryEntry[] {
+  public listMemoryEntries(workspacePath?: string, limit = 10): StrandsMemoryEntry[] {
     try {
       if (!fs.existsSync(this.memoryFilePath)) return [];
       const raw = JSON.parse(fs.readFileSync(this.memoryFilePath, 'utf8'));
       if (!Array.isArray(raw)) return [];
       const filtered = workspacePath
-        ? raw.filter((m: HermesMemoryEntry) => !m.workspacePath || m.workspacePath === workspacePath)
+        ? raw.filter((m: StrandsMemoryEntry) => !m.workspacePath || m.workspacePath === workspacePath)
         : raw;
       return filtered.slice(0, limit);
     } catch {

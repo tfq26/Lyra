@@ -2,7 +2,7 @@
 /**
  * Lyra Cross-Device Cloud Session Sync & DeepSeek Harness (`dsh`) Bridge CLI
  *
- * Syncs cloud chat transcripts (via sequence-delta `sinceSeq`) and 24/7 Hermes Repo Memory
+ * Syncs cloud chat transcripts (via sequence-delta `sinceSeq`) and 24/7 Strands Repo Memory
  * between devices so DeepSeek Harness (`dsh`), VS Code, and CLI sessions stay in lockstep
  * without any web chat UI.
  *
@@ -172,9 +172,9 @@ async function pullSessionDelta(sessionId = 'session-main'): Promise<void> {
     }
   }
 
-  if (Array.isArray(delta.hermesMemory) && delta.hermesMemory.length > 0) {
-    console.log(`\n--- 24/7 Hermes Repo Memory (${delta.hermesMemory.length} entry/entries) ---`);
-    for (const mem of delta.hermesMemory.slice(0, 3)) {
+  if (Array.isArray(delta.strandsMemory) && delta.strandsMemory.length > 0) {
+    console.log(`\n--- 24/7 Strands Repo Memory (${delta.strandsMemory.length} entry/entries) ---`);
+    for (const mem of delta.strandsMemory.slice(0, 3)) {
       console.log(`• [${mem.id}] ${mem.topic}: ${mem.consensusSummary}`);
     }
   }

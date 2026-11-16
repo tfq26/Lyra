@@ -61,7 +61,7 @@ export class AstIndexer {
     const walk = (dir: string) => {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name.startsWith('.') && entry.name !== '.env') continue;
+        if (entry.name.startsWith('.')) continue;
         if (IGNORED_DIRS.has(entry.name)) continue;
 
         const fullPath = path.join(dir, entry.name);

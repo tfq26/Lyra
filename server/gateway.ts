@@ -18,6 +18,7 @@ import { UnifiedStore } from './unifiedStore';
 import { TeamCoordinator } from './teamCoordinator';
 import { ProcessManager } from './processManager';
 import { NativeAgentRuntime } from './nativeAgentRuntime';
+import { isSecretFilePath, redactSecretText } from './security';
 import { WorktreeManager } from './worktreeManager';
 import { MaintenanceCaretaker } from './maintenanceCaretaker';
 import { resolveOptimalModel } from './modelRouter';
@@ -148,7 +149,7 @@ export class LyraHarnessGateway {
     private coordinator?: TeamCoordinator,
     config: GatewayConfig = {}
   ) {
-    this.apiKey = config.apiKey || process.env.LYRA_GATEWAY_API_KEY || 'lyra-harness-default-secret';
+    this.apiKey = config.apiKey || process.env.LYRA_GATEWAY_API_KEY || crypto.randomBytes(24).toString('hex');
     this.rateLimiter = new GatewayRateLimiter(
       config.maxRequestsPerWindow ?? 120,
       config.rateLimitWindowMs ?? 60_000
@@ -182,9 +183,9 @@ export class LyraHarnessGateway {
     passwordOrToken: string,
     betterAuthRuntime?: any
   ): Promise<{ success: boolean; token?: string; user?: { email: string }; error?: string }> {
-    const defaultPassword = process.env.LYRA_ADMIN_PASSWORD || 'lyra-admin-password';
+    const defaultPassword = process.env.LYRA_ADMIN_PASSWORD;
     const isTokenMatch = passwordOrToken === this.apiKey;
-    const isPasswordMatch = passwordOrToken === defaultPassword;
+    const isPasswordMatch = Boolean(defaultPassword && passwordOrToken === defaultPassword);
 
     // Check Better Auth if available
     if (betterAuthRuntime && !isTokenMatch && !isPasswordMatch) {
@@ -227,9 +228,9 @@ export class LyraHarnessGateway {
   }
 
   public authenticateUser(email: string, passwordOrToken: string): { success: boolean; token?: string; user?: { email: string }; error?: string } {
-    const defaultPassword = process.env.LYRA_ADMIN_PASSWORD || 'lyra-admin-password';
+    const defaultPassword = process.env.LYRA_ADMIN_PASSWORD;
     const isTokenMatch = passwordOrToken === this.apiKey;
-    const isPasswordMatch = passwordOrToken === defaultPassword;
+    const isPasswordMatch = Boolean(defaultPassword && passwordOrToken === defaultPassword);
 
     const existing = this.userTokens.get(passwordOrToken);
     if (existing && existing.expiresAt > Date.now()) {
@@ -298,7 +299,7 @@ export class LyraHarnessGateway {
     }
 
     // 2. Worker Concurrency Hard Ceiling: Maximum 4 parallel workers (default to single sequential worker)
-    const rawWorkers = params.teamConfig?.workers || ['hermes'];
+    const rawWorkers = params.teamConfig?.workers || ['strands'];
     const safeWorkers = (Array.isArray(rawWorkers) ? rawWorkers : [rawWorkers]).slice(0, 4);
     const safeConcurrency = Math.min(Math.max(params.teamConfig?.concurrencyLimit || 1, 1), 4);
 
@@ -348,9 +349,9 @@ export class LyraHarnessGateway {
       stage: 'planning',
       state: 'in_progress',
       teamConfig: {
-        lead: (params.teamConfig?.lead as any) || 'hermes',
+        lead: (params.teamConfig?.lead as any) || 'strands',
         workers: safeWorkers as any,
-        reviewer: (params.teamConfig?.reviewer as any) || 'hermes',
+        reviewer: (params.teamConfig?.reviewer as any) || 'strands',
         plannerModel: plannerDecision.modelId,
         workerModel: workerModelDecision.modelId,
         reviewerModel: reviewerDecision.modelId,
@@ -369,9 +370,9 @@ export class LyraHarnessGateway {
 
     if (this.coordinator) {
       const teamConfig: import('./types').TeamConfig = {
-        lead: (params.teamConfig?.lead as any) || 'hermes',
+        lead: (params.teamConfig?.lead as any) || 'strands',
         workers: safeWorkers as any,
-        reviewer: (params.teamConfig?.reviewer as any) || 'hermes',
+        reviewer: (params.teamConfig?.reviewer as any) || 'strands',
         plannerModel: plannerDecision.modelId,
         workerModel: workerModelDecision.modelId,
         reviewerModel: reviewerDecision.modelId,
@@ -471,7 +472,9 @@ export class LyraHarnessGateway {
     if (!req || req.status !== 'pending') return false;
 
     req.status = 'resolved';
-    req.resolvedContent = content;
+    req.resolvedContent = isSecretFilePath(req.filePath)
+      ? '[REDACTED: sensitive path blocked by privacy policy]'
+      : redactSecretText(content).slice(0, 120_000);
 
     this.notifyRunSubscribers(req.runId, {
       type: 'context_provided',
@@ -555,7 +558,9 @@ export class LyraHarnessGateway {
     }
 
     const { run } = match;
-    const allDiffs = run.diffs || [];
+    const allDiffs = (run.diffs || [])
+      .filter((d) => !isSecretFilePath(d.filename))
+      .map((d) => (d.patch ? { ...d, patch: redactSecretText(d.patch) } : d));
 
     if (params.filePath) {
       const filtered = allDiffs.filter((d) => d.filename.includes(params.filePath!));

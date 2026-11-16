@@ -1,4 +1,4 @@
-export type AgentType = 'antigravity' | 'claude_code' | 'codex' | 'opencode' | 'hermes' | 'strands' | 'orchestrator';
+export type AgentType = 'antigravity' | 'claude_code' | 'codex' | 'opencode' | 'strands' | 'orchestrator';
 export type ExecutionMode = 'safe' | 'sandboxed' | 'unrestricted';
 
 export type RunState =
@@ -77,10 +77,11 @@ export interface HarnessProfile {
 export interface ModelProviderProfile {
   id: string;
   name: string;
-  provider: 'bedrock' | 'openrouter';
+  provider: 'bedrock' | 'openrouter' | 'openai-compat';
   credentialMode?: 'byo' | 'managed';
   enabled?: boolean;
   region?: string;
+  baseUrl?: string;
   model: string;
   roleArn?: string;
   /** Server-only Secrets Manager reference. Never serialize to the client. */
@@ -241,6 +242,8 @@ export interface TaskItem {
   assignedAgent: AgentType;
   assignedProfileId?: string;
   assignedModel?: string;
+  assignedNodeId?: string;
+  assignedNodeName?: string;
   stage: 'plan' | 'implement' | 'review' | 'verify';
   status: TaskState;
   dependencies?: string[];
@@ -271,6 +274,8 @@ export interface RunnerNode {
   platform?: string;
   arch?: string;
   activeTasks?: number;
+  maxConcurrency?: number;
+  capabilities?: string[];
   cpus?: number;
   memoryMb?: number;
   status: 'online' | 'busy' | 'offline';

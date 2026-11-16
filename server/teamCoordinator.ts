@@ -16,6 +16,7 @@ import { cloudWatchTelemetry, type PolicyProfile } from './cloudwatchEmf';
 import { resolveOptimalModel } from './modelRouter';
 import { CloudMonitor } from './cloudMonitor';
 import type { NativeAgentRuntime } from './nativeAgentRuntime';
+import { isSecretFilePath, redactSecretText } from './security';
 import type { TeamRun, TaskItem, CheckItem, TeamConfig, AgentType, HarnessId, FileDiff, TeamStage, RunState, UsageMetrics } from './types';
 
 export type PlanApprovalPolicy = 'manual' | 'risk-gated' | 'auto';
@@ -1339,6 +1340,7 @@ Instructions:
       const uniqueFiles = Array.from(new Set(fileMatches)).filter((f) => {
         const lower = f.toLowerCase();
         return !lower.startsWith('http') &&
+               !isSecretFilePath(f) &&
                !lower.includes('.git') &&
                !lower.includes('node_modules') &&
                !lower.includes('/bin/') && !lower.startsWith('bin/') &&
@@ -1358,7 +1360,7 @@ Instructions:
         try {
           const full = path.resolve(taskCwd, rel);
           if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-            const content = fs.readFileSync(full, 'utf-8');
+            const content = redactSecretText(fs.readFileSync(full, 'utf-8'));
             const lines = content.split('\n');
             const truncated = lines.slice(0, 150).join('\n');
             preloaded.push(`--- Preloaded: ${rel} (${lines.length} lines) ---\n${truncated}${lines.length > 150 ? '\n... [remaining lines omitted]' : ''}`);

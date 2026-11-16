@@ -26,7 +26,7 @@ describe('Milestone 3 & 4: Team Coordination, Worktrees & Dependency Scheduling'
     execFileSync('git', ['commit', '-qm', 'fixture'], { cwd: tempDir });
     store = new UnifiedStore(tempDir);
     processManager = new ProcessManager();
-    processManager.getCapabilities = () => Object.fromEntries(['antigravity', 'claude_code', 'codex', 'opencode', 'hermes'].map((harness) => [harness, { installed: true, options: [] }])) as unknown as ReturnType<ProcessManager['getCapabilities']>;
+    processManager.getCapabilities = () => Object.fromEntries(['antigravity', 'claude_code', 'codex', 'opencode', 'strands'].map((harness) => [harness, { installed: true, options: [] }])) as unknown as ReturnType<ProcessManager['getCapabilities']>;
     processManager.runAgent = async ({ agentType, runId = 'test-run', sessionId, processId }) => ({
       sessionId, runId, processId, agentType, code: 127, fullContent: '', error: 'test harness stub',
     });
@@ -192,7 +192,7 @@ describe('Milestone 3 & 4: Team Coordination, Worktrees & Dependency Scheduling'
     execFileSync('git', ['add', 'package.json'], { cwd: tempDir });
     execFileSync('git', ['commit', '-qm', 'add passing check'], { cwd: tempDir });
     const fake = new ProcessManager();
-    fake.getCapabilities = () => Object.fromEntries(['antigravity', 'claude_code', 'codex', 'opencode', 'hermes'].map((harness) => [harness, { installed: true, options: [] }])) as unknown as ReturnType<ProcessManager['getCapabilities']>;
+    fake.getCapabilities = () => Object.fromEntries(['antigravity', 'claude_code', 'codex', 'opencode', 'strands'].map((harness) => [harness, { installed: true, options: [] }])) as unknown as ReturnType<ProcessManager['getCapabilities']>;
     let activeWorkers = 0;
     let peakWorkers = 0;
     let reviewerRuns = 0;
@@ -218,7 +218,7 @@ describe('Milestone 3 & 4: Team Coordination, Worktrees & Dependency Scheduling'
     const run = await coordinator.startTeamRun({
       sessionId: session.id,
       objective: 'Make two independent changes',
-      teamConfig: { lead: 'codex', workers: ['codex', 'opencode'], reviewer: 'hermes', concurrencyLimit: 2 },
+      teamConfig: { lead: 'codex', workers: ['codex', 'opencode'], reviewer: 'strands', concurrencyLimit: 2 },
       concurrencyLimit: 2,
       workspacePath: tempDir,
       runId: 'run-approved-swarm',

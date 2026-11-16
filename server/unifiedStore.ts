@@ -140,7 +140,7 @@ export class UnifiedStore extends EventEmitter {
   public saveHarnessProfile(input: { id?: string; name: string; harness: HarnessId; enabled?: boolean; model?: string }): HarnessProfile {
     const name = String(input.name || '').trim().slice(0, 80);
     if (!name) throw new Error('Profile name is required.');
-    if (!['antigravity', 'claude_code', 'codex', 'opencode', 'hermes'].includes(input.harness)) {
+    if (!['antigravity', 'claude_code', 'codex', 'opencode', 'strands'].includes(input.harness)) {
       throw new Error('Unsupported harness type.');
     }
     const profiles = this.listHarnessProfiles();
@@ -216,24 +216,27 @@ export class UnifiedStore extends EventEmitter {
     }
   }
 
-  public saveModelProviderProfile(input: { id?: string; name: string; provider: 'bedrock' | 'openrouter'; credentialMode?: 'byo' | 'managed'; region?: string; model: string; roleArn?: string; secretRef?: string }): ModelProviderProfile {
+  public saveModelProviderProfile(input: { id?: string; name: string; provider: 'bedrock' | 'openrouter' | 'openai-compat'; credentialMode?: 'byo' | 'managed'; region?: string; baseUrl?: string; model: string; roleArn?: string; secretRef?: string }): ModelProviderProfile {
     const name = String(input.name || '').trim().slice(0, 80);
-    if (input.provider !== 'bedrock' && input.provider !== 'openrouter') throw new Error('Only Amazon Bedrock and OpenRouter model providers are supported.');
+    if (input.provider !== 'bedrock' && input.provider !== 'openrouter' && input.provider !== 'openai-compat') {
+      throw new Error('Only Amazon Bedrock, OpenRouter, and OpenAI-compatible (Ollama) model providers are supported.');
+    }
     if (input.credentialMode !== undefined && input.credentialMode !== 'byo' && input.credentialMode !== 'managed') throw new Error('Credential mode must be byo or managed.');
     const region = input.provider === 'bedrock' ? String(input.region || '').trim().slice(0, 64) : undefined;
+    const baseUrl = input.provider === 'openai-compat' && input.baseUrl ? String(input.baseUrl).trim().slice(0, 300) : undefined;
     const model = String(input.model || '').trim().slice(0, 200);
     const roleArn = input.roleArn ? String(input.roleArn).trim().slice(0, 300) : undefined;
     if (!name || !model) throw new Error('Provider profile requires a name and model ID.');
     if (input.provider === 'bedrock' && !region) throw new Error('Bedrock profile requires an AWS region.');
     if (region && !/^[a-z]{2}(-gov)?-[a-z]+-\d$/.test(region)) throw new Error('Bedrock region is invalid.');
-    if (input.provider === 'openrouter' && roleArn) throw new Error('IAM roles can only be configured for Bedrock.');
+    if (input.provider !== 'bedrock' && roleArn) throw new Error('IAM roles can only be configured for Bedrock.');
     if (roleArn && !/^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role\/[A-Za-z0-9+=,.@_/-]+$/.test(roleArn)) throw new Error('Role ARN must identify an IAM role in an AWS account.');
     const profiles = this.listModelProviderProfiles();
     const id = input.id || `provider-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const previous = profiles.find((profile) => profile.id === id);
-    if (previous && (previous.provider !== input.provider || previous.model !== model || previous.region !== region)) this.deleteModelCompatibility(id);
+    if (previous && (previous.provider !== input.provider || previous.model !== model || previous.region !== region || previous.baseUrl !== baseUrl)) this.deleteModelCompatibility(id);
     const now = new Date().toISOString();
-    const profile: ModelProviderProfile = { id, name, provider: input.provider, credentialMode: input.credentialMode || 'byo', ...(region ? { region } : {}), model, ...(roleArn ? { roleArn } : {}), ...(input.secretRef ? { secretRef: input.secretRef } : {}), createdAt: previous?.createdAt || now, updatedAt: now };
+    const profile: ModelProviderProfile = { id, name, provider: input.provider, credentialMode: input.credentialMode || 'byo', ...(region ? { region } : {}), ...(baseUrl ? { baseUrl } : {}), model, ...(roleArn ? { roleArn } : {}), ...(input.secretRef ? { secretRef: input.secretRef } : {}), createdAt: previous?.createdAt || now, updatedAt: now };
     const next = previous ? profiles.map((item) => item.id === id ? profile : item) : [...profiles, profile];
     this.atomicWrite(this.modelProviderProfilesPath, JSON.stringify(next, null, 2));
     this.emit('model_provider_profiles_updated', next);

@@ -18,7 +18,7 @@ import { BedrockModel } from '@strands-agents/sdk/models/bedrock';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
 import { ModelRouter, RoutingCandidate, FallbackStrategy } from '@strands-agents/sdk/models/routing';
 import { LocalFileStorage } from '@strands-agents/sdk/storage';
-import { createNativeTools } from './nativeTools';
+import { createNativeTools, inferNativeToolGroupsFromPrompt } from './nativeTools';
 import { resolveOptimalModel } from './modelRouter';
 import { loadProviderCredential } from './providerSecrets';
 import { CloudMonitor } from './cloudMonitor';
@@ -39,8 +39,6 @@ export interface StrandsRunOptions {
   onToolCall?: (toolCall: any) => void;
   onProgress?: (message: string) => void;
 }
-
-export type HermesRunOptions = StrandsRunOptions;
 
 export class StrandsHarness extends EventEmitter {
   private static instance: StrandsHarness;
@@ -162,12 +160,13 @@ export class StrandsHarness extends EventEmitter {
       // 2. Instantiate native tools with surgical edit_file, git_grep fallback, and polyglot run_check
       const tools = createNativeTools(cwd, {
         signal,
+        toolGroups: inferNativeToolGroupsFromPrompt(prompt),
         onToolEvent: (toolCall) => {
           this.emit('tool_call', {
             sessionId,
             runId,
             processId,
-            agentType: 'hermes',
+            agentType: 'strands',
             toolCall,
           });
           options.onToolCall?.(toolCall);
@@ -248,7 +247,7 @@ Rules:
             sessionId,
             runId,
             processId,
-            agentType: 'hermes',
+            agentType: 'strands',
             delta,
             fullContent,
           });
@@ -271,7 +270,7 @@ Rules:
         sessionId,
         runId,
         processId,
-        agentType: 'hermes',
+        agentType: 'strands',
         code: 0,
         fullContent,
         usage,
@@ -283,7 +282,7 @@ Rules:
           sessionId,
           runId,
           processId,
-          agentType: 'hermes',
+          agentType: 'strands',
           message: errorMsg,
         });
       } else {
@@ -294,7 +293,7 @@ Rules:
         sessionId,
         runId,
         processId,
-        agentType: 'hermes',
+        agentType: 'strands',
         code: signal?.aborted ? 130 : 1,
         fullContent,
         error: errorMsg,
@@ -303,6 +302,3 @@ Rules:
     }
   }
 }
-
-// Backward-compatible alias
-export const HermesHarness = StrandsHarness;

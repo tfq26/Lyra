@@ -61,6 +61,9 @@ export class RunnerDaemon {
       os: os.platform(),
       cpus: os.cpus().length,
       memoryMb: Math.round(os.totalmem() / (1024 * 1024)),
+      activeTasks: 0,
+      maxConcurrency: Math.max(1, Number(process.env.LYRA_RUNNER_MAX_CONCURRENCY) || os.cpus().length),
+      capabilities: ['native', 'swarm', 'verify'],
       status: 'online',
       lastSeen: new Date().toISOString(),
     };
@@ -231,7 +234,8 @@ export class RunnerDaemon {
   private registerNode(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.node.lastSeen = new Date().toISOString();
-    this.node.status = 'online';
+    this.node.activeTasks = this.activeTasks.size;
+    this.node.status = this.activeTasks.size >= (this.node.maxConcurrency ?? 1) ? 'busy' : 'online';
 
     const msg = {
       type: 'register_node',
@@ -247,7 +251,12 @@ export class RunnerDaemon {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({
           type: 'node_heartbeat',
-          payload: { id: this.node.id },
+          payload: {
+            id: this.node.id,
+            activeTasks: this.activeTasks.size,
+            maxConcurrency: this.node.maxConcurrency,
+            capabilities: this.node.capabilities,
+          },
         }));
       }
     }, this.heartbeatIntervalMs);

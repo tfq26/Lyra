@@ -21,7 +21,7 @@ async function main() {
   }
 
   console.log('💡 To dispatch an autonomous swarm on any ticket:');
-  console.log(`   bun scripts/lyra-dispatch.ts --prompt "Implement ${result.ticketsGenerated[0].id}" --workers hermes\n`);
+  console.log(`   bun scripts/lyra-dispatch.ts --prompt "Implement ${result.ticketsGenerated[0].id}" --workers strands\n`);
 }
 
 main().catch((err) => {

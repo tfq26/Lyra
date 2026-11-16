@@ -172,7 +172,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
     "impactedLyraFiles": ["src/App.tsx", "server/gateway.ts"],
     "acceptanceCriteria": ["Criteria 1", "Criteria 2"],
     "verificationCommand": "bun run build && bun test",
-    "dispatchPrompt": "bun scripts/lyra-dispatch.ts --prompt \\"Implement SCOUT-001: Feature Name\\" --workers hermes"
+    "dispatchPrompt": "bun scripts/lyra-dispatch.ts --prompt \\"Implement SCOUT-001: Feature Name\\" --workers strands"
   }
 ]`;
 
@@ -209,7 +209,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
           impactedLyraFiles: Array.isArray(item.impactedLyraFiles) ? item.impactedLyraFiles : [],
           acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria : [],
           verificationCommand: item.verificationCommand || 'bun run build && bun test',
-          dispatchPrompt: item.dispatchPrompt || `bun scripts/lyra-dispatch.ts --prompt "Implement ${item.id}" --workers hermes`,
+          dispatchPrompt: item.dispatchPrompt || `bun scripts/lyra-dispatch.ts --prompt "Implement ${item.id}" --workers strands`,
           createdAt: timestamp,
         }));
       }
@@ -254,7 +254,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
           'Passes build and test suite',
         ],
         verificationCommand: 'bun run build && bun test',
-        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-001: Interactive Inline Diff Scrubbing" --workers hermes',
+        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-001: Interactive Inline Diff Scrubbing" --workers strands',
         createdAt: timestamp,
       },
       {
@@ -273,7 +273,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
           'Applies edits with zero layout shift',
         ],
         verificationCommand: 'bun run build && bun test',
-        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-002: Side-by-Side Dual-Pane Code Canvas" --workers hermes',
+        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-002: Side-by-Side Dual-Pane Code Canvas" --workers strands',
         createdAt: timestamp,
       },
       {
@@ -292,7 +292,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
           'Zero WebSocket latency overhead',
         ],
         verificationCommand: 'bun run build && bun test',
-        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-003: Multi-Agent Sub-Task Execution Graph Tree" --workers hermes',
+        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-003: Multi-Agent Sub-Task Execution Graph Tree" --workers strands',
         createdAt: timestamp,
       },
       {
@@ -311,7 +311,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
           'Esc closes smoothly',
         ],
         verificationCommand: 'bun run build && bun test',
-        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-004: Command Palette with Action Macros" --workers hermes',
+        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-004: Command Palette with Action Macros" --workers strands',
         createdAt: timestamp,
       },
       {
@@ -330,7 +330,7 @@ Return ONLY a valid JSON array of 5-6 objects adhering to this schema:
           'Passes all unit tests',
         ],
         verificationCommand: 'bun run build && bun test',
-        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-005: Automated Sandboxed Reproduction Test Generator" --workers hermes',
+        dispatchPrompt: 'bun scripts/lyra-dispatch.ts --prompt "Implement SCOUT-005: Automated Sandboxed Reproduction Test Generator" --workers strands',
         createdAt: timestamp,
       },
     ];

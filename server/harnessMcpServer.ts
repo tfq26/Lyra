@@ -235,7 +235,7 @@ export class LyraHarnessMcpServer {
       {
         name: 'lyra_council_analyze',
         description:
-          'Run Lyra Multi-Model Council & Cross-Document RAG Analyzer where the Pareto Model Selector dynamically assigns 3 orthogonal Bedrock models + a Chair model based on role complexity, policy profile, and live latency/throttle health, persisting the insight to 24/7 Hermes Repo Memory.',
+          'Run Lyra Multi-Model Council & Cross-Document RAG Analyzer where the Pareto Model Selector dynamically assigns 3 orthogonal Bedrock models + a Chair model based on role complexity, policy profile, and live latency/throttle health, persisting the insight to 24/7 Strands Repo Memory.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -282,7 +282,7 @@ export class LyraHarnessMcpServer {
       {
         name: 'lyra_sync_session',
         description:
-          'Sync cloud chat history (sequence-delta messages since sinceSeq) and 24/7 Hermes Repo Memory across devices for any harness (DeepSeek Harness dsh, VS Code, Claude Code, Codex, Antigravity).',
+          'Sync cloud chat history (sequence-delta messages since sinceSeq) and 24/7 Strands Repo Memory across devices for any harness (DeepSeek Harness dsh, VS Code, Claude Code, Codex, Antigravity).',
         inputSchema: {
           type: 'object',
           properties: {

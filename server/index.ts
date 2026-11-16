@@ -26,7 +26,8 @@ import { BEDROCK_CATALOG } from './modelDecisionEngine';
 import { cloudWatchTelemetry } from './cloudwatchEmf';
 import { sqsTaskQueue } from './sqsTaskQueue';
 import { AHPServer } from './ahpProtocol';
-import { OpenAiCompatBridge } from './openaiCompatBridge';
+import { ProjectRegistry } from './projectRegistry';
+import { AgentRunApi } from './agentRunApi';
 import { modelCouncil } from './modelCouncil';
 import { triggerEngine } from './nightShift/triggerEngine';
 import { nightShiftRunner } from './nightShift/nightShiftRunner';
@@ -34,8 +35,10 @@ import { connectPresenceManager } from './connectPresence';
 import { cloudTunnelManager } from './cloudTunnel';
 import { killAllActiveProcesses } from './nativeTools';
 import { userFeedbackService } from './userFeedbackService';
+import { RunnerPool } from './runnerPool';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
+import { handleGatewayLlmStream, listGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
 
 const PORT = 3001;
 
@@ -117,6 +120,21 @@ const registeredNodes = new Map<string, RunnerNode>([
   }],
 ]);
 let activeNodeId = 'node-local';
+const runnerPool = new RunnerPool(Array.from(registeredNodes.values()));
+setInterval(() => {
+  const offlined = runnerPool.pruneStale(45_000);
+  if (offlined.length > 0) {
+    for (const id of offlined) {
+      const node = registeredNodes.get(id);
+      if (node) {
+        node.status = 'offline';
+        node.activeTasks = 0;
+      }
+      runnerSockets.delete(id);
+    }
+    broadcast({ type: 'nodes_list', payload: { nodes: Array.from(registeredNodes.values()), activeNodeId } });
+  }
+}, 15_000).unref();
 const processManager = new ProcessManager();
 const messageBus = new MessageBus();
 const eventJournal = process.env.LYRA_DATABASE_HOST
@@ -138,7 +156,8 @@ const legacyAuthToken = process.env.LYRA_AUTH_TOKEN;
 const runnerToken = process.env.LYRA_RUNNER_TOKEN || process.env.LYRA_AUTH_TOKEN;
 const harnessGateway = new LyraHarnessGateway(store, teamCoordinator);
 ahpServer.attachGateway(harnessGateway);
-const openAiBridge = new OpenAiCompatBridge(ahpServer);
+const projectRegistry = new ProjectRegistry();
+const agentRunApi = new AgentRunApi(ahpServer, projectRegistry);
 
 function publicProviderProfile(profile: import('./types').ModelProviderProfile) {
   const { secretRef, externalId: _externalId, ...safe } = profile;
@@ -211,8 +230,49 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
 
   if (url.pathname === '/api/auth/status' && req.method === 'GET') {
+    const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim());
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ required: Boolean(getBetterAuthRuntime()), signUpEnabled: process.env.LYRA_AUTH_DISABLE_SIGNUP !== 'true' }));
+    res.end(JSON.stringify({
+      required: Boolean(getBetterAuthRuntime()),
+      signUpEnabled: process.env.LYRA_AUTH_DISABLE_SIGNUP !== 'true',
+      googleEnabled,
+    }));
+    return;
+  }
+
+  if (url.pathname === '/api/auth/gram-handoff' && req.method === 'GET' && getBetterAuthRuntime()) {
+    const requestedRedirect = url.searchParams.get('redirect') || 'http://localhost:7337/';
+    let safeRedirect = 'http://localhost:7337/';
+    try {
+      const parsedRedirect = new URL(requestedRedirect);
+      const allowedHosts = new Set(['localhost', '127.0.0.1']);
+      const extraOrigins = [process.env.GRAM_PUBLIC_URL, ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS || '').split(',')]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value));
+      const isTrustedExtra = extraOrigins.some((origin) => {
+        try {
+          return new URL(origin).origin === parsedRedirect.origin;
+        } catch {
+          return false;
+        }
+      });
+      if (allowedHosts.has(parsedRedirect.hostname) || isTrustedExtra) {
+        safeRedirect = parsedRedirect.toString();
+      }
+    } catch {}
+    const authSession = await getBetterAuthSession(req.headers).catch(() => null);
+    const token = authSession?.session?.token;
+    if (token) {
+      const target = new URL(safeRedirect);
+      target.hash = `auth_token=${encodeURIComponent(token)}`;
+      res.writeHead(302, { Location: target.toString() });
+      res.end();
+      return;
+    }
+    const fallback = new URL(safeRedirect);
+    fallback.searchParams.set('auth_error', 'session_missing');
+    res.writeHead(302, { Location: fallback.toString() });
+    res.end();
     return;
   }
 
@@ -301,7 +361,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- SECURE HARNESS API GATEWAY ---
-  if (url.pathname.startsWith('/api/gateway/')) {
+  if (url.pathname.startsWith('/api/gateway/') || url.pathname.startsWith('/api/ahp/')) {
     const clientIp = req.socket.remoteAddress || 'unknown-client';
     const authHeader = req.headers.authorization;
     const bearerKey = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
@@ -363,6 +423,38 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 3a. Central LLM Gateway: Model Catalog & Streaming Inference Proxy
+    if (url.pathname === '/api/gateway/llm/models' && req.method === 'GET') {
+      const privacyMode = (url.searchParams.get('privacyMode') as PrivacyMode) || (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(listGatewayLlmModels(privacyMode)));
+      return;
+    }
+
+    if (url.pathname === '/api/gateway/llm/stream' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          if (!payload.model || !Array.isArray(payload.messages)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing model or messages array.' }));
+            return;
+          }
+          await handleGatewayLlmStream(req, res, payload);
+        } catch (err: any) {
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err?.message || 'Gateway LLM request failed.' }));
+          } else {
+            res.end();
+          }
+        }
+      });
+      return;
+    }
+
     // 3. Dispatch Task
     if (url.pathname === '/api/gateway/dispatch' && req.method === 'POST') {
       let body = '';
@@ -399,6 +491,21 @@ const server = http.createServer(async (req, res) => {
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ runId: run.id, stage: run.stage || run.state, state: run.state, tasks: run.tasks, checks: run.checks }));
+      return;
+    }
+
+    // Authenticated, read-only patch export for local harness review.
+    const diffMatch = url.pathname.match(/^\/api\/gateway\/runs\/([^/]+)\/diffs$/);
+    if (diffMatch && req.method === 'GET') {
+      const runId = diffMatch[1]!;
+      try {
+        const diffData = harnessGateway.inspectDiff({ runId });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(diffData));
+      } catch (err: any) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Run diffs not found.' }));
+      }
       return;
     }
 
@@ -614,6 +721,35 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 18b. AHP Protocol: Cross-Device Chats & Tasks Delta Sync (`sinceSeq`)
+    if ((url.pathname === '/api/gateway/ahp/sync' || url.pathname === '/api/ahp/sync') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const authSession = getBetterAuthRuntime()
+            ? await getBetterAuthSession(req.headers).catch(() => null)
+            : null;
+          if (process.env.LYRA_HOSTED === 'true' && !authSession?.user?.id) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Authenticated user session required for cloud sync.' }));
+            return;
+          }
+          const userId = authSession?.user?.id || 'local-dev';
+          const result = eventJournal
+            ? await eventJournal.syncChatsAndTasks(userId, parsed)
+            : ahpServer.syncChatsAndTasks(userId, parsed);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Sync failed' }));
+        }
+      });
+      return;
+    }
+
     // 19. AHP Protocol v1.3: 3-Lane Adaptive Streaming Chat (Instant Ask, Fast Patch, Full Swarm)
     if ((url.pathname === '/api/gateway/ahp/chat' || url.pathname === '/api/ahp/chat') && req.method === 'POST') {
       let body = '';
@@ -712,7 +848,7 @@ const server = http.createServer(async (req, res) => {
           telemetry,
           queue,
           sessions: sessions.slice(0, 20),
-          hermesMemory: modelCouncil.listMemoryEntries(undefined, 15),
+          strandsMemory: modelCouncil.listMemoryEntries(undefined, 15),
           infrastructure: {
             hosted: process.env.LYRA_HOSTED === 'true',
             region: process.env.AWS_REGION || 'us-east-2',
@@ -900,53 +1036,56 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 24. Gateway-scoped OpenAI-compatible endpoints
-    if (url.pathname === '/api/gateway/v1/models' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(openAiBridge.listModels()));
-      return;
-    }
-
-    if (url.pathname === '/api/gateway/v1/chat/completions' && req.method === 'POST') {
-      let body = '';
-      req.on('data', (c) => (body += c));
-      req.on('end', async () => {
-        try {
-          const parsed = JSON.parse(body || '{}');
-          await openAiBridge.handleChatCompletions(req, res, parsed);
-        } catch {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: 'Invalid JSON body' } }));
-        }
-      });
-      return;
-    }
-
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Gateway route not found' }));
     return;
   }
 
-  // --- OPENAI-COMPATIBLE HARNESS PROVIDER (`/v1/models` & `/v1/chat/completions`) ---
-  // Used by VS Code GitHub Copilot Chat (`chatLanguageModels.json`), DeepSeek Harness (`dsh`), OpenCode, etc.
-  if (url.pathname === '/v1/models' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(openAiBridge.listModels()));
+  const readBoundedJson = (maxBytes = 262_144): Promise<any | null> =>
+    new Promise((resolve) => {
+      let body = '';
+      let aborted = false;
+      req.on('data', (chunk) => {
+        if (aborted) return;
+        body += chunk;
+        if (Buffer.byteLength(body, 'utf8') > maxBytes) {
+          aborted = true;
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Request body exceeds 256KB limit.', type: 'invalid_request_error' } }));
+          resolve(null);
+        }
+      });
+      req.on('end', () => {
+        if (aborted) return;
+        try {
+          resolve(JSON.parse(body || '{}'));
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Invalid JSON body' } }));
+          resolve(null);
+        }
+      });
+    });
+
+  // --- FRONTIER AGENT LAYER API (`/v1/agents/run`, `/v1/agents/runs/:id`) ---
+  if (url.pathname === '/v1/agents/run' && req.method === 'POST') {
+    const clientIp = req.socket.remoteAddress || 'unknown';
+    const rate = harnessGateway.checkRateLimit(clientIp);
+    if (!rate.allowed) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Rate limit exceeded. Slow down.', type: 'rate_limit_exceeded' } }));
+      return;
+    }
+    const parsed = await readBoundedJson();
+    if (parsed !== null) {
+      await agentRunApi.handleCreateRun(req, res, parsed);
+    }
     return;
   }
 
-  if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', async () => {
-      try {
-        const parsed = JSON.parse(body || '{}');
-        await openAiBridge.handleChatCompletions(req, res, parsed);
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Invalid JSON body' } }));
-      }
-    });
+  const agentRunMatch = url.pathname.match(/^\/v1\/agents\/runs\/([^/]+)$/);
+  if (agentRunMatch && req.method === 'GET') {
+    agentRunApi.handleGetRun(req, res, decodeURIComponent(agentRunMatch[1] || ''));
     return;
   }
 
@@ -982,6 +1121,36 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', service: 'Lyra Hub' }));
+    return;
+  }
+
+  // Protected Project API Key management (requires Hub/admin auth)
+  if (url.pathname === '/api/projects' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ projects: projectRegistry.listProjects() }));
+    return;
+  }
+
+  if (url.pathname === '/api/projects' && req.method === 'POST') {
+    const parsed = await readBoundedJson();
+    if (parsed !== null) {
+      try {
+        const created = projectRegistry.createProject(parsed);
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(created));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Failed to create project' }));
+      }
+    }
+    return;
+  }
+
+  const deleteProjectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+  if (deleteProjectMatch && req.method === 'DELETE') {
+    const revoked = projectRegistry.revokeProject(decodeURIComponent(deleteProjectMatch[1] || ''));
+    res.writeHead(revoked ? 200 : 404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ revoked }));
     return;
   }
 
@@ -1267,7 +1436,7 @@ const server = http.createServer(async (req, res) => {
     req.on('end', () => {
       try {
         const { nodeId } = JSON.parse(body || '{}');
-        if (nodeId && registeredNodes.has(nodeId)) {
+        if (nodeId && (nodeId === 'homelab-pool' || registeredNodes.has(nodeId))) {
           activeNodeId = nodeId;
           broadcast({ type: 'node_selected', payload: { activeNodeId } });
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1443,12 +1612,14 @@ const server = http.createServer(async (req, res) => {
         if (payload.roleArn && (!payload.externalId || !String(payload.externalId).trim())) throw new Error('Bedrock role connections require the role trust External ID.');
         const id = payload.id ? assertSafeId(String(payload.id), 'profile ID') : `provider-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const credential = { ...(payload.apiKey ? { apiKey: String(payload.apiKey).trim() } : {}), ...(payload.externalId ? { externalId: String(payload.externalId).trim() } : {}) };
-        if (payload.provider !== 'bedrock' && payload.provider !== 'openrouter') throw new Error('Choose Amazon Bedrock or OpenRouter.');
+        if (payload.provider !== 'bedrock' && payload.provider !== 'openrouter' && payload.provider !== 'openai-compat') {
+          throw new Error('Choose Amazon Bedrock, OpenRouter, or OpenAI-compatible (Ollama).');
+        }
         const existing = store.listModelProviderProfiles().find((item) => item.id === id);
         const credentialMode = payload.credentialMode === 'managed' ? 'managed' : payload.credentialMode === 'byo' ? 'byo' : existing?.credentialMode || 'byo';
         if (credentialMode === 'managed' && Object.keys(credential).length) throw new Error('Do not send provider credentials when selecting Lyra-managed usage.');
         if (process.env.LYRA_HOSTED === 'true' && Object.keys(credential).length && req.headers['x-forwarded-proto'] !== 'https') throw new Error('Provider credentials can only be saved over HTTPS. Configure an HTTPS ALB certificate before entering BYO secrets.');
-        const provider = payload.provider as 'bedrock' | 'openrouter';
+        const provider = payload.provider as 'bedrock' | 'openrouter' | 'openai-compat';
         const secretRef = Object.keys(credential).length ? await saveProviderCredential(id, credential) : (existing?.provider === provider && credentialMode === 'byo' ? existing.secretRef : undefined);
         const profile = store.saveModelProviderProfile({ ...payload, id, provider, credentialMode, secretRef });
         res.writeHead(201, { 'Content-Type': 'application/json' });
@@ -2048,12 +2219,21 @@ wss.on('connection', async (ws, req) => {
   console.log('[Lyra Hub] UI Client connected via WebSocket');
 
   ws.on('close', () => {
+    const offlinedId = runnerPool.removeSocket(ws);
+    if (offlinedId) {
+      const node = registeredNodes.get(offlinedId);
+      if (node && node.type !== 'local' && node.type !== 'cloud') {
+        node.status = 'offline';
+        node.activeTasks = 0;
+      }
+    }
     for (const [nodeId, socket] of runnerSockets.entries()) {
       if (socket === ws) {
         runnerSockets.delete(nodeId);
         const node = registeredNodes.get(nodeId);
         if (node && node.type !== 'local' && node.type !== 'cloud') {
           node.status = 'offline';
+          node.activeTasks = 0;
           broadcast({ type: 'nodes_list', payload: { nodes: Array.from(registeredNodes.values()), activeNodeId } });
         }
       }
@@ -2145,10 +2325,13 @@ wss.on('connection', async (ws, req) => {
             });
             return;
           }
-        } else if (activeNodeId !== 'node-local' && runnerSockets.has(activeNodeId)) {
-          const runnerSocket = runnerSockets.get(activeNodeId);
-          if (runnerSocket?.readyState === WebSocket.OPEN) {
-            runnerSocket.send(JSON.stringify({
+        } else if (activeNodeId === 'homelab-pool' || (activeNodeId !== 'node-local' && runnerSockets.has(activeNodeId))) {
+          const picked = activeNodeId === 'homelab-pool'
+            ? runnerPool.pickNode({ nodeType: 'homelab', capability: 'swarm' })
+            : runnerPool.pickNode({ preferredNodeId: activeNodeId });
+          if (picked) {
+            runnerPool.recordTaskStart(picked.node.id);
+            picked.socket.send(JSON.stringify({
               type: 'team_run_start',
               sessionId,
               runId,
@@ -2166,10 +2349,10 @@ wss.on('connection', async (ws, req) => {
               agent: 'orchestrator',
               type: 'status',
               runId,
-              payload: { text: `Dispatched team swarm to remote runner node: ${registeredNodes.get(activeNodeId)?.name || activeNodeId}` },
+              payload: { text: `Dispatched team swarm to Tailscale/remote runner node: ${picked.node.name || picked.node.id}` },
             });
             return;
-          } else {
+          } else if (activeNodeId !== 'homelab-pool') {
             throw new Error(`Selected runner node ${activeNodeId} is currently disconnected.`);
           }
         }
@@ -2228,7 +2411,7 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify({ type: 'nodes_list', payload: { nodes: Array.from(registeredNodes.values()), activeNodeId } }));
       } else if (msg.type === 'select_node') {
         const { nodeId } = msg.payload || {};
-        if (nodeId && registeredNodes.has(nodeId)) {
+        if (nodeId && (nodeId === 'homelab-pool' || registeredNodes.has(nodeId))) {
           activeNodeId = nodeId;
           broadcast({ type: 'node_selected', payload: { activeNodeId } });
         }
@@ -2236,21 +2419,23 @@ wss.on('connection', async (ws, req) => {
         const node = msg.payload as RunnerNode;
         if (node && node.id) {
           runnerSockets.set(node.id, ws);
-          registeredNodes.set(node.id, {
-            ...node,
-            status: 'online',
-            lastSeen: new Date().toISOString(),
-          });
+          const registered = runnerPool.register(node, ws);
+          registeredNodes.set(node.id, registered);
           broadcast({ type: 'nodes_list', payload: { nodes: Array.from(registeredNodes.values()), activeNodeId } });
         }
       } else if (msg.type === 'wake_node') {
         await idleManager.wakeNow();
       } else if (msg.type === 'node_heartbeat') {
-        const { id } = msg.payload || {};
-        const node = id ? registeredNodes.get(id) : undefined;
-        if (node) {
-          node.lastSeen = new Date().toISOString();
-          node.status = 'online';
+        const { id, activeTasks, maxConcurrency, capabilities } = msg.payload || {};
+        if (id) {
+          const updated = runnerPool.heartbeat(id, { activeTasks, maxConcurrency, capabilities });
+          const node = registeredNodes.get(id);
+          if (node && updated) {
+            node.lastSeen = updated.lastSeen;
+            node.status = updated.status;
+            node.activeTasks = updated.activeTasks;
+            node.maxConcurrency = updated.maxConcurrency;
+          }
         }
       } else if (msg.type === 'team_run_pause' || msg.type === 'team_run_resume') {
         const sessionId = assertSafeId(String(msg.sessionId || msg.payload?.sessionId || ''), 'session ID');
@@ -2327,10 +2512,13 @@ wss.on('connection', async (ws, req) => {
               await eventJournal?.waitForWrites().catch(() => undefined);
               throw error;
             }
-          } else if (activeNodeId !== 'node-local' && runnerSockets.has(activeNodeId)) {
-            const runnerSocket = runnerSockets.get(activeNodeId);
-            if (runnerSocket?.readyState === WebSocket.OPEN) {
-              runnerSocket.send(JSON.stringify({
+          } else if (activeNodeId === 'homelab-pool' || (activeNodeId !== 'node-local' && runnerSockets.has(activeNodeId))) {
+            const picked = activeNodeId === 'homelab-pool'
+              ? runnerPool.pickNode({ nodeType: 'homelab', capability: 'native' })
+              : runnerPool.pickNode({ preferredNodeId: activeNodeId });
+            if (picked) {
+              runnerPool.recordTaskStart(picked.node.id);
+              picked.socket.send(JSON.stringify({
                 type: 'run_task',
                 sessionId,
                 runId,
@@ -2340,14 +2528,14 @@ wss.on('connection', async (ws, req) => {
                 agent: 'orchestrator',
                 type: 'status',
                 runId,
-                payload: { text: `Dispatched task to remote runner node: ${registeredNodes.get(activeNodeId)?.name || activeNodeId}` },
+                payload: { text: `Dispatched task to Tailscale/remote runner node: ${picked.node.name || picked.node.id}` },
               });
-            } else {
+              return;
+            } else if (activeNodeId !== 'homelab-pool') {
               throw new Error(`Selected runner node ${activeNodeId} is currently disconnected.`);
             }
-          } else {
-            await nativeAgentRuntime.run({ sessionId, runId, prompt, workspacePath: cwd, providerProfileId, tenantId: process.env.LYRA_TENANT_ID || 'local' });
           }
+          await nativeAgentRuntime.run({ sessionId, runId, prompt, workspacePath: cwd, providerProfileId, tenantId: process.env.LYRA_TENANT_ID || 'local' });
           return;
         }
 

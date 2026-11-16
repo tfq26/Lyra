@@ -6,11 +6,19 @@ import { LocalFileStorage, S3Storage } from '@strands-agents/sdk/storage';
 import type { Model } from '@strands-agents/sdk';
 import type { ModelProviderProfile } from './types';
 import { loadProviderCredential } from './providerSecrets';
+import { enforcePrivacyPolicy, type PrivacyMode } from './gatewayLlmProxy';
 import path from 'path';
 
 export interface ModelRuntimeContext { tenantId: string; region?: string; }
 
 export async function createStrandsModel(profile: ModelProviderProfile): Promise<Model> {
+  const privacyMode = (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
+  enforcePrivacyPolicy({
+    privacyMode,
+    provider: profile.provider,
+    modelId: profile.model,
+    baseUrl: profile.baseUrl || (profile.provider === 'openai-compat' ? process.env.LYRA_OPENAI_COMPAT_BASE_URL || 'http://127.0.0.1:11434/v1' : undefined),
+  });
   const secret = await loadProviderCredential(profile);
   if (profile.provider === 'openrouter') {
     if (!secret.apiKey) throw new Error('OpenRouter API credentials are required for this connection.');
@@ -21,6 +29,17 @@ export async function createStrandsModel(profile: ModelProviderProfile): Promise
       maxTokens: 8192,
       temperature: 0.2,
       clientConfig: { baseURL: 'https://openrouter.ai/api/v1' },
+    });
+  }
+  if (profile.provider === 'openai-compat') {
+    const baseURL = (profile.baseUrl || process.env.LYRA_OPENAI_COMPAT_BASE_URL || 'http://127.0.0.1:11434/v1').replace(/\/+$/, '');
+    return new OpenAIModel({
+      api: 'chat',
+      modelId: profile.model,
+      apiKey: secret.apiKey || 'ollama',
+      maxTokens: 8192,
+      temperature: 0.2,
+      clientConfig: { baseURL },
     });
   }
 

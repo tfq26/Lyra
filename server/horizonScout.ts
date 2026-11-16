@@ -103,7 +103,7 @@ ${ticket.verificationCommand}
 ## 5. Autonomous Dispatch Instructions
 To execute this ticket autonomously with Lyra:
 \`\`\`bash
-bun scripts/lyra-dispatch.ts --prompt "Implement feature ${ticket.id}: ${ticket.title}" --workers hermes
+bun scripts/lyra-dispatch.ts --prompt "Implement feature ${ticket.id}: ${ticket.title}" --workers strands
 \`\`\`
 `;
 

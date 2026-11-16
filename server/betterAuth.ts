@@ -105,20 +105,47 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
   }
 
   const hostname = new URL(baseURL).hostname;
+  const extraOrigins = [
+    process.env.GRAM_PUBLIC_URL,
+    ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS || '').split(','),
+  ]
+    .map((origin) => origin?.trim())
+    .filter((origin): origin is string => Boolean(origin));
+
+  const trustedOrigins = Array.from(
+    new Set([
+      baseURL,
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://127.0.0.1:5174',
+      'http://localhost:3001',
+      'http://127.0.0.1:3001',
+      'http://localhost:7337',
+      'http://127.0.0.1:7337',
+      'tauri://localhost',
+      ...extraOrigins,
+    ])
+  );
+
+  const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 
   const auth = betterAuth({
     appName: 'Lyra',
     baseURL,
     secret,
     database: databaseConfig,
-    trustedOrigins: [
-      baseURL,
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
-      'http://localhost:3001',
-      'http://127.0.0.1:3001',
-      'tauri://localhost'
-    ],
+    trustedOrigins,
+    socialProviders:
+      googleClientId && googleClientSecret
+        ? {
+            google: {
+              clientId: googleClientId,
+              clientSecret: googleClientSecret,
+            },
+          }
+        : undefined,
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: process.env.LYRA_HOSTED === 'true' && Boolean(process.env.LYRA_SES_FROM_EMAIL),

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { UnifiedStore } from './unifiedStore';
 import { redactSecrets } from './security';
-import { StrandsHarness } from './hermesHarness';
+import { StrandsHarness } from './strandsHarness';
 
 export interface NativeRunInput {
   sessionId: string;

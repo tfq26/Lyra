@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n \"HUB,UI\" -c \"magenta,cyan\" \"bun run server/index.ts\" \"vite\"",
+    "dev": "bun run server/index.ts",
     "doctor": "bun scripts/lyra-doctor.ts",
     "dispatch": "bun scripts/lyra-dispatch.ts",
     "sync": "bun scripts/lyra-sync.ts",
@@ -14,13 +14,10 @@
     "benchmark:pulse": "bun scripts/run-pulse-benchmark.ts",
     "deploy:aws": "bash scripts/deploy-aws-runner.sh",
     "dev:server": "bun run server/index.ts",
-    "dev:client": "vite",
     "runner": "bun run server/runnerDaemon.ts",
     "monitor": "bun run server/cloudMonitor.ts",
     "test:swarm": "bun test tests/live-autonomous-loop.test.ts",
-    "build": "vite build",
-    "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1161.0",

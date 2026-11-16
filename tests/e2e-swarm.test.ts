@@ -30,7 +30,7 @@ describe('Headless End-to-End Swarm Assembly Line', () => {
 
     store = new UnifiedStore(path.join(tempRepo, '.lyra-test-store'));
     processManager = new ProcessManager();
-    processManager.getCapabilities = () => Object.fromEntries(['antigravity', 'claude_code', 'codex', 'opencode', 'hermes'].map((harness) => [harness, { installed: true, options: [] }])) as unknown as ReturnType<ProcessManager['getCapabilities']>;
+    processManager.getCapabilities = () => Object.fromEntries(['antigravity', 'claude_code', 'codex', 'opencode', 'strands'].map((harness) => [harness, { installed: true, options: [] }])) as unknown as ReturnType<ProcessManager['getCapabilities']>;
     worktreeManager = new WorktreeManager();
     nativeRuntime = new NativeAgentRuntime(store);
     coordinator = new TeamCoordinator(store, processManager, nativeRuntime);

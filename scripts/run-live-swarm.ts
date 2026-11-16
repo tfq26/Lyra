@@ -72,7 +72,7 @@ async function main() {
   const objective = 'Implement multiply, divide (with divide-by-zero check), and power functions in src/calculator.ts, and add unit tests in src/calculator.test.ts';
 
   console.log(`🎯 Objective: "${objective}"`);
-  console.log('⚡ Harness: Hermes (Strands Agent Runtime)');
+  console.log('⚡ Harness: Strands Agent Runtime');
   console.log('🤖 Auto-Routed Frontier Model: Claude Sonnet 4.6 (us.anthropic.claude-sonnet-4-6)');
   console.log('🧐 Independent Reviewer Model: Claude Opus 4.6 (us.anthropic.claude-opus-4-6-v1)\n');
 
@@ -84,9 +84,9 @@ async function main() {
     objective,
     workspacePath: targetDir,
     teamConfig: {
-      lead: 'hermes',
-      workers: ['hermes'],
-      reviewer: 'hermes',
+      lead: 'strands',
+      workers: ['strands'],
+      reviewer: 'strands',
     },
   });
 

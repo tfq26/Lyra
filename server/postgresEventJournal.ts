@@ -37,6 +37,34 @@ export class PostgresEventJournal {
       UNIQUE (tenant_id, session_id, sequence)
     )`;
     await this.sql`CREATE INDEX IF NOT EXISTS lyra_events_session_cursor ON lyra_events (tenant_id, session_id, sequence)`;
+    await this.sql`CREATE SEQUENCE IF NOT EXISTS lyra_sync_seq`;
+    await this.sql`CREATE TABLE IF NOT EXISTS lyra_synced_chats (
+      tenant_id text NOT NULL,
+      user_id text NOT NULL,
+      session_id text NOT NULL,
+      title text NOT NULL DEFAULT 'Untitled chat',
+      project_id text NOT NULL DEFAULT 'local',
+      project_label text NOT NULL DEFAULT 'Local workspace',
+      model_id text NOT NULL DEFAULT 'auto',
+      messages jsonb NOT NULL DEFAULT '[]'::jsonb,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      deleted boolean NOT NULL DEFAULT false,
+      sequence bigint NOT NULL DEFAULT nextval('lyra_sync_seq'),
+      PRIMARY KEY (tenant_id, user_id, session_id)
+    )`;
+    await this.sql`CREATE INDEX IF NOT EXISTS lyra_synced_chats_seq_idx ON lyra_synced_chats (tenant_id, user_id, sequence)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS lyra_synced_tasks (
+      tenant_id text NOT NULL,
+      user_id text NOT NULL,
+      session_id text NOT NULL,
+      run_id text NOT NULL,
+      stage text NOT NULL DEFAULT 'completed',
+      checkpoint jsonb NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      sequence bigint NOT NULL DEFAULT nextval('lyra_sync_seq'),
+      PRIMARY KEY (tenant_id, user_id, session_id, run_id)
+    )`;
+    await this.sql`CREATE INDEX IF NOT EXISTS lyra_synced_tasks_seq_idx ON lyra_synced_tasks (tenant_id, user_id, sequence)`;
     if (migrateLocalEvents) {
       for (const session of store.listSessions()) {
         const data = store.getSession(session.id);
@@ -73,6 +101,108 @@ export class PostgresEventJournal {
       SELECT sequence, event_id, session_id, occurred_at, agent, event_type, run_id, payload
       FROM lyra_events WHERE tenant_id = ${this.tenantId} AND session_id = ${sessionId} AND sequence > ${after} ORDER BY sequence ASC LIMIT ${Math.min(10_000, Math.max(1, limit))}`;
     return rows.map((row) => ({ sequence: Number(row.sequence), eventId: row.event_id, sessionId: row.session_id, timestamp: row.occurred_at.toISOString(), agent: row.agent, type: row.event_type, runId: row.run_id || undefined, payload: row.payload }));
+  }
+
+  public async syncChatsAndTasks(
+    userId: string,
+    payload: { sinceSeq?: number; chats?: any[]; tasks?: any[]; deletedChatIds?: string[] }
+  ): Promise<{ latestSeq: number; chats: any[]; tasks: any[]; deletedChatIds: string[] }> {
+    const sinceSeq = Number(payload.sinceSeq || 0);
+
+    for (const chat of payload.chats || []) {
+      if (!chat?.sessionId) continue;
+      const msgs = JSON.parse(JSON.stringify(chat.messages || [])) as JSONValue;
+      const updatedAt = chat.updatedAt || new Date().toISOString();
+      await this.sql`
+        INSERT INTO lyra_synced_chats (tenant_id, user_id, session_id, title, project_id, project_label, model_id, messages, updated_at, deleted, sequence)
+        VALUES (${this.tenantId}, ${userId}, ${chat.sessionId}, ${chat.title || 'Untitled chat'}, ${chat.projectId || 'local'}, ${chat.projectLabel || 'Local workspace'}, ${chat.modelId || 'auto'}, ${this.sql.json(msgs)}, ${updatedAt}, false, nextval('lyra_sync_seq'))
+        ON CONFLICT (tenant_id, user_id, session_id) DO UPDATE SET
+          title = EXCLUDED.title,
+          project_id = EXCLUDED.project_id,
+          project_label = EXCLUDED.project_label,
+          model_id = EXCLUDED.model_id,
+          messages = EXCLUDED.messages,
+          updated_at = EXCLUDED.updated_at,
+          deleted = false,
+          sequence = nextval('lyra_sync_seq')
+        WHERE EXCLUDED.updated_at >= lyra_synced_chats.updated_at
+      `;
+    }
+
+    for (const cp of payload.tasks || []) {
+      if (!cp?.sessionId || !cp?.runId) continue;
+      const cpJson = JSON.parse(JSON.stringify(cp)) as JSONValue;
+      const updatedAt = cp.timestamp || new Date().toISOString();
+      await this.sql`
+        INSERT INTO lyra_synced_tasks (tenant_id, user_id, session_id, run_id, stage, checkpoint, updated_at, sequence)
+        VALUES (${this.tenantId}, ${userId}, ${cp.sessionId}, ${cp.runId}, ${cp.stage || 'completed'}, ${this.sql.json(cpJson)}, ${updatedAt}, nextval('lyra_sync_seq'))
+        ON CONFLICT (tenant_id, user_id, session_id, run_id) DO UPDATE SET
+          stage = EXCLUDED.stage,
+          checkpoint = EXCLUDED.checkpoint,
+          updated_at = EXCLUDED.updated_at,
+          sequence = nextval('lyra_sync_seq')
+      `;
+    }
+
+    for (const delId of payload.deletedChatIds || []) {
+      if (!delId) continue;
+      await this.sql`
+        INSERT INTO lyra_synced_chats (tenant_id, user_id, session_id, updated_at, deleted, sequence)
+        VALUES (${this.tenantId}, ${userId}, ${delId}, ${new Date().toISOString()}, true, nextval('lyra_sync_seq'))
+        ON CONFLICT (tenant_id, user_id, session_id) DO UPDATE SET
+          deleted = true,
+          updated_at = EXCLUDED.updated_at,
+          sequence = nextval('lyra_sync_seq')
+      `;
+      await this.sql`DELETE FROM lyra_synced_tasks WHERE tenant_id = ${this.tenantId} AND user_id = ${userId} AND session_id = ${delId}`;
+    }
+
+    const chatRows = await this.sql<{ session_id: string; title: string; project_id: string; project_label: string; model_id: string; messages: unknown[]; updated_at: Date; deleted: boolean; sequence: number | string }[]>`
+      SELECT session_id, title, project_id, project_label, model_id, messages, updated_at, deleted, sequence
+      FROM lyra_synced_chats
+      WHERE tenant_id = ${this.tenantId} AND user_id = ${userId} AND sequence > ${sinceSeq}
+      ORDER BY sequence ASC
+    `;
+
+    const taskRows = await this.sql<{ checkpoint: any; sequence: number | string }[]>`
+      SELECT checkpoint, sequence
+      FROM lyra_synced_tasks
+      WHERE tenant_id = ${this.tenantId} AND user_id = ${userId} AND sequence > ${sinceSeq}
+      ORDER BY sequence ASC
+    `;
+
+    let latestSeq = sinceSeq;
+    const chats: any[] = [];
+    const deletedChatIds: string[] = [];
+    for (const r of chatRows) {
+      const seq = Number(r.sequence);
+      if (seq > latestSeq) latestSeq = seq;
+      if (r.deleted) {
+        deletedChatIds.push(r.session_id);
+      } else {
+        chats.push({
+          sessionId: r.session_id,
+          title: r.title,
+          projectId: r.project_id,
+          projectLabel: r.project_label,
+          modelId: r.model_id,
+          messages: r.messages || [],
+          updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at),
+          syncSeq: seq,
+        });
+      }
+    }
+
+    const tasks: any[] = [];
+    for (const r of taskRows) {
+      const seq = Number(r.sequence);
+      if (seq > latestSeq) latestSeq = seq;
+      if (r.checkpoint && typeof r.checkpoint === 'object') {
+        tasks.push({ ...r.checkpoint, syncSeq: seq });
+      }
+    }
+
+    return { latestSeq, chats, tasks, deletedChatIds };
   }
 
   public async clearSession(sessionId: string): Promise<void> { await this.sql`DELETE FROM lyra_events WHERE tenant_id = ${this.tenantId} AND session_id = ${sessionId}`; }

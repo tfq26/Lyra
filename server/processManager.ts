@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import type { AgentType, ExecutionMode } from './types';
 import { EventEmitter } from 'events';
-import { HermesHarness, StrandsHarness } from './hermesHarness';
+import { StrandsHarness } from './strandsHarness';
 
 export interface RunAgentOptions {
   agentType: AgentType;
@@ -90,8 +90,6 @@ export class ProcessManager extends EventEmitter {
         'codex',
       ],
       opencode: [path.join(home, '.local', 'bin', 'opencode'), path.join(home, '.bun', 'bin', 'opencode'), '/usr/local/bin/opencode', 'opencode'],
-      hermes: [path.join(home, '.local', 'bin', 'hermes-agent'), path.join(home, '.local', 'bin', 'hermes'), '/usr/local/bin/hermes-agent', 'hermes-agent', 'hermes'],
-      'hermes-agent': [path.join(home, '.local', 'bin', 'hermes-agent'), '/usr/local/bin/hermes-agent', 'hermes-agent'],
     };
 
     const paths = candidates[name] || [name];
@@ -125,7 +123,6 @@ export class ProcessManager extends EventEmitter {
   public getCapabilities() {
     const isInstalled = (name: string) => Boolean(this.findBinary(name));
     return {
-      hermes: { installed: true, options: ['model', 'effort', 'sandbox', 'max-turns'] },
       strands: { installed: true, options: ['model', 'effort', 'sandbox', 'max-turns'] },
       antigravity: {
         installed: isInstalled('antigravity'),
@@ -146,7 +143,6 @@ export class ProcessManager extends EventEmitter {
   public getReadiness() {
     const isInstalled = (name: string) => Boolean(this.findBinary(name));
     return {
-      hermes: { installed: true, authenticated: true, ready: true, reason: 'Unified Strands/Hermes harness ready.' },
       strands: { installed: true, authenticated: true, ready: true, reason: 'Unified Strands harness ready.' },
       antigravity: { installed: isInstalled('antigravity'), authenticated: 'unknown', ready: isInstalled('antigravity'), reason: isInstalled('antigravity') ? 'Ready' : 'CLI executable not found.' },
       claude_code: { installed: isInstalled('claude_code'), authenticated: 'unknown', ready: isInstalled('claude_code'), reason: isInstalled('claude_code') ? 'Ready' : 'CLI executable not found.' },
@@ -161,11 +157,11 @@ export class ProcessManager extends EventEmitter {
       claude_code: 'LYRA_CLAUDE_MODELS',
       codex: 'LYRA_CODEX_MODELS',
       opencode: 'LYRA_OPENCODE_MODELS',
-      hermes: 'LYRA_HERMES_MODELS',
+      strands: 'LYRA_STRANDS_MODELS',
     };
     const configured = modelEnv[agentType] ? process.env[modelEnv[agentType]!] : undefined;
     if (configured) return configured.split(',').map((value) => value.trim()).filter(Boolean).map((value) => ({ id: value, label: value }));
-    if (agentType !== 'antigravity') return [{ id: 'default', label: agentType === 'opencode' ? 'OpenCode provider default' : agentType === 'hermes' ? 'Hermes provider default' : 'CLI default' }];
+    if (agentType !== 'antigravity') return [{ id: 'default', label: agentType === 'opencode' ? 'OpenCode provider default' : agentType === 'strands' ? 'Strands provider default' : 'CLI default' }];
 
     const binary = this.findBinary('antigravity');
     if (!binary) {
@@ -221,11 +217,7 @@ export class ProcessManager extends EventEmitter {
 
     this.emit('run_started', { sessionId, runId, agentType, executionMode });
 
-    if (agentType === 'hermes' || agentType === 'strands') {
-      const bin = this.findBinary('hermes-agent') || this.findBinary('hermes');
-      if (bin && agentType === 'hermes') {
-        return this.runPortableCli(options, executionMode);
-      }
+    if (agentType === 'strands') {
       return StrandsHarness.getInstance().execute({
         prompt,
         cwd,
@@ -235,27 +227,27 @@ export class ProcessManager extends EventEmitter {
         model: options.model,
         signal: (options as any).signal,
         onChunk: (delta, full) => {
-          this.emit('content_chunk', { sessionId, runId, processId: options.processId, agentType: options.agentType || 'hermes', delta, fullContent: full });
+          this.emit('content_chunk', { sessionId, runId, processId: options.processId, agentType: options.agentType || 'strands', delta, fullContent: full });
         },
         onProgress: (message) => {
-          this.emit('thought', { sessionId, runId, agentType: options.agentType || 'hermes', thought: message });
+          this.emit('thought', { sessionId, runId, agentType: options.agentType || 'strands', thought: message });
         },
       });
     }
 
     if (agentType === 'antigravity') {
       if (!this.findBinary('antigravity')) {
-        return HermesHarness.getInstance().execute({ prompt, cwd, sessionId, runId, processId: options.processId, model: options.model });
+        return StrandsHarness.getInstance().execute({ prompt, cwd, sessionId, runId, processId: options.processId, model: options.model });
       }
       return this.runAntigravity(prompt, cwd, sessionId, runId, executionMode, options);
     } else if (agentType === 'codex') {
       if (!this.findBinary('codex')) {
-        return HermesHarness.getInstance().execute({ prompt, cwd, sessionId, runId, processId: options.processId, model: options.model });
+        return StrandsHarness.getInstance().execute({ prompt, cwd, sessionId, runId, processId: options.processId, model: options.model });
       }
       return this.runCodex(prompt, cwd, sessionId, runId, executionMode, options);
     } else if (agentType === 'claude_code') {
       if (!this.findBinary('claude_code')) {
-        return HermesHarness.getInstance().execute({ prompt, cwd, sessionId, runId, processId: options.processId, model: options.model });
+        return StrandsHarness.getInstance().execute({ prompt, cwd, sessionId, runId, processId: options.processId, model: options.model });
       }
       return this.runClaude(prompt, cwd, sessionId, runId, executionMode, options);
     } else if (agentType === 'opencode') {
@@ -313,7 +305,7 @@ export class ProcessManager extends EventEmitter {
     const { agentType, prompt, cwd, sessionId } = options;
     const runId = options.runId || `run-${Date.now()}`;
     const processId = options.processId || `${runId}:${agentType}:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`;
-    const binaryName = agentType === 'hermes' ? 'hermes-agent' : 'opencode';
+    const binaryName = 'opencode';
     const bin = this.findBinary(binaryName);
     if (!bin) return Promise.resolve(this.handleUnavailableHarness(agentType, cwd, sessionId, runId));
 

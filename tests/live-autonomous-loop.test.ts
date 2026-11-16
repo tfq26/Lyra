@@ -80,7 +80,7 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
       workspacePath: tempRepo,
     });
 
-    // Configure ProcessManager to execute Strands agents (Hermes) with simulated Bedrock responses
+    // Configure ProcessManager to execute Strands agents with simulated Bedrock responses
     processManager.runAgent = async ({ agentType, prompt, cwd = tempRepo, processId }) => {
       // Record model invocation in CloudMonitor
       monitor.recordInvocation('us.anthropic.claude-sonnet-4-6', 1200, 350);
@@ -105,13 +105,13 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
               title: 'Implement slugify and camelCase in stringUtils.ts',
               scope: 'src/stringUtils.ts',
               expectedOutputs: ['src/stringUtils.ts'],
-              recommendedHarness: 'hermes',
+              recommendedHarness: 'strands',
             },
             {
               title: 'Add comprehensive unit tests for slugify and camelCase',
               scope: 'src/stringUtils.test.ts',
               expectedOutputs: ['src/stringUtils.test.ts'],
-              recommendedHarness: 'hermes',
+              recommendedHarness: 'strands',
               dependsOn: ['Implement slugify and camelCase in stringUtils.ts'],
             },
           ],
@@ -128,7 +128,7 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
           sessionId,
           runId,
           processId,
-          agentType: 'hermes',
+          agentType: 'strands',
           code: 0,
           fullContent: '```json\n' + JSON.stringify(plan, null, 2) + '\n```',
           usage: { promptTokens: 1200, completionTokens: 350, totalTokens: 1550 },
@@ -141,7 +141,7 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
           sessionId,
           runId,
           processId,
-          agentType: 'hermes',
+          agentType: 'strands',
           code: 0,
           fullContent: JSON.stringify({
             approved: true,
@@ -151,7 +151,7 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
         };
       }
 
-      // 3. Worker Stage: Strands Hermes Worker implementing code in worktree
+      // 3. Worker Stage: Strands Worker implementing code in worktree
       if (prompt.includes('Your Assigned Task: Add comprehensive unit tests')) {
         const testFile = path.join(cwd, 'src', 'stringUtils.test.ts');
         const testCode = `import { describe, expect, it } from 'bun:test';\nimport { capitalize, slugify, camelCase } from './stringUtils';\n\ndescribe('stringUtils', () => {\n  it('capitalize', () => {\n    expect(capitalize('lyra')).toBe('Lyra');\n  });\n\n  it('slugify converts titles to slugs', () => {\n    expect(slugify('Hello World! 2026')).toBe('hello-world-2026');\n  });\n\n  it('camelCase converts separated words', () => {\n    expect(camelCase('autonomous strands loop')).toBe('autonomousStrandsLoop');\n  });\n});\n`;
@@ -161,7 +161,7 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
           sessionId,
           runId,
           processId,
-          agentType: 'hermes',
+          agentType: 'strands',
           code: 0,
           fullContent: 'Added comprehensive test suite covering slugify and camelCase.',
           usage: { promptTokens: 950, completionTokens: 220, totalTokens: 1170 },
@@ -177,7 +177,7 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
           sessionId,
           runId,
           processId,
-          agentType: 'hermes',
+          agentType: 'strands',
           code: 0,
           fullContent: 'Implemented slugify and camelCase with complete TypeScript definitions.',
           usage: { promptTokens: 900, completionTokens: 250, totalTokens: 1150 },
@@ -194,9 +194,9 @@ describe('Autonomous Strands Agent Loop with Review, Conflict Check & Direct Mer
       objective: 'Implement slugify and camelCase utility functions with unit tests',
       workspacePath: tempRepo,
       teamConfig: {
-        lead: 'hermes',
-        worker: 'hermes',
-        reviewer: 'hermes',
+        lead: 'strands',
+        worker: 'strands',
+        reviewer: 'strands',
       },
     });
 

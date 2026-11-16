@@ -91,7 +91,7 @@ bun run build && bun test
 
 ## 3. Autonomous Dispatch Command
 \`\`\`bash
-bun scripts/lyra-dispatch.ts --prompt "Fix user feedback ${id}: ${payload.description.replace(/"/g, '\\"')}" --workers hermes
+bun scripts/lyra-dispatch.ts --prompt "Fix user feedback ${id}: ${payload.description.replace(/"/g, '\\"')}" --workers strands
 \`\`\`
 `;
 
