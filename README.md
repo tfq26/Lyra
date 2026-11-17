@@ -1,169 +1,106 @@
-# Lyra — Adaptive Cloud Engineering Swarm & Universal Agent Harness
+# Lyra
 
-Lyra (`v1.3`) is a **24/7 cloud-native autonomous engineering platform** built on **Amazon Bedrock**, **Amazon SQS + S3 Claim-Check**, **AWS ECS Fargate**, and the **Agent Host Protocol (AHP v1.3)**.
+Lyra is the cloud backend, authentication hub, LLM gateway proxy, and swarm runner for [Gram](../Gram) and external coding harnesses.
 
-Lyra replaces laptop-tethered AI coding tools with an adaptive, multi-lane cloud runtime: sub-second streaming answers and surgical AST-verified patches when you want instant velocity, and durable, worktree-isolated multi-agent swarms when you want autonomous multi-file engineering—syncing across **VS Code**, **Antigravity IDE**, and the **Web Portal** with zero local daemon or battery drain.
+Production runs on Cloudflare Containers (`https://lyra.2helix.org`) via `cloudflare.config.ts` and `worker.ts`, routing inference to Amazon Bedrock and OpenRouter, authenticating users with Better Auth, and persisting runs either in local SQLite (`server/data/`) or AWS PostgreSQL/SQS/Fargate when configured.
 
----
+## What Lyra Handles
 
-## Architecture Highlights (AWS Well-Architected v1.3)
+1. **Authentication Hub (`server/betterAuth.ts`, `server/index.ts`)**:
+   - Powered by Better Auth with Google OAuth, email/password accounts, account linking (`trustedProviders: ['google']`), and WebAuthn passkeys.
+   - Issues both browser cookies and Bearer session tokens (`/api/auth/gram-start`, `/api/auth/gram-handoff`) so desktop and web Gram clients can sign in without copying API keys manually.
+   - Uses SQLite (`server/data/auth.sqlite`) in local/container mode by default, or AWS Aurora/RDS PostgreSQL (`auth` schema) when `LYRA_DATABASE_HOST` is set.
+2. **Central LLM Gateway (`server/gatewayLlmProxy.ts`)**:
+   - `POST /api/gateway/llm/stream` proxies streaming, tool-capable turns to Amazon Bedrock (`ConverseStreamCommand` with prompt caching) and OpenRouter / OpenAI-compatible endpoints.
+   - Enforces `standard`, `zdr` (zero data retention), and `local-only` privacy policies, redacts inline credentials (`server/security.ts`), and emits structured `diagnostics` on SSE stream errors.
+3. **Adaptive Execution and Swarm Orchestration**:
+   - `server/intentTriage.ts` routes turns across instant responses, single-file AST-verified patches (`server/fastLaneExecutor.ts`), and full multi-agent DAG swarms (`server/teamCoordinator.ts`).
+   - `server/worktreeManager.ts` isolates swarm tasks into Git shadow worktrees (`.lyra/worktrees/`) and `server/proofSandbox/` runs verification commands before integration.
+   - `server/ecsNativeDispatcher.ts` and `server/sqsTaskQueue.ts` support offloading cloud runs to AWS ECS Fargate via Amazon SQS + S3 claim-check.
+4. **MCP Server and Telemetry**:
+   - `server/harnessMcpServer.ts` (and `scripts/mcp-server-stdio.ts`) exposes Lyra tools over MCP (`lyra_dispatch_task`, `lyra_get_run_status`, `lyra_inspect_diff`, `lyra_create_github_pr`, etc.).
+   - `server/cloudwatchEmf.ts` emits CloudWatch Embedded Metric Format telemetry.
 
-### 1. 3-Lane Adaptive Execution Engine (`< 1ms` Triage)
-Instead of forcing simple questions or 3-line fixes through a 30-second container + git worktree pipeline, `IntentTriage` routes every turn in under `1ms` (with optional user override `Auto / Ask / Fast Patch / Swarm` and 1-click *Escalate to Swarm*):
-- **Lane 0 — Instant Ask**: Direct Amazon Bedrock `ConverseStreamCommand` streaming over AHP SSE with Bedrock Prompt Caching (`cachePoint: { type: 'default' }`) for sub-second TTFT.
-- **Lane 1 — Fast Patch**: Single-file surgical `<lyra_patch>` edits verified in-memory (`< 3ms`) via `Bun.Transpiler` / JSON syntax checks and AST export-preservation guards without spawning git worktrees, streamed directly to VS Code with native side-by-side virtual diff preview (`lyra-patch:`) and 1-click `vscode.WorkspaceEdit` application.
-- **Lane 2 — Full Cloud Swarm**: Parallel DAG execution across pre-warmed git worktrees (`lyra/task-*`), risk-gated plan auto-approval (`DecisionEngine`), compiler/unit-test verification gates, and off-critical-path `ScribeAgent` synthesis.
+## Running Locally
 
-### 2. Autonomous Night Shift & Proof Sandbox
-- **Unattended 24/7 Self-Healing**: `NightShiftEngine` runs scheduled or on-demand deep bug investigations, compiler log diagnoses, and multi-file repair loops without manual supervision.
-- **Containerized Proof Sandbox**: `ProofSandbox` isolates verification runs (`tsc`, `npm run build`, `bun test`, unit tests) and generates deterministic, cryptographic **Proof Certificates** before code touches main branches.
-- **AST Invariant Guard & Log Resolution**: Suffix-matching invariant detector resolves compiler errors from bare filenames (e.g., `hooks.ts` → `src/components/Canvas/hooks.ts`) and enforces AST invariants to prevent accidental deletion of existing exported interfaces or functions.
+Prerequisites: [Bun](https://bun.sh) 1.2+.
 
-### 3. Multi-Model Council (Architectural Consensus)
-- **3-Seat Parallel Debate**: Orchestrates distinct Bedrock models simultaneously (e.g., Frontier Architect, Security Auditor, and FinOps Specialist) to evaluate major architectural refactors, trade-offs, and migrations.
-- **Consensus & Dissent Synthesis**: Aggregates structured scores and resolves dissents before executing complex swarms or irreversible database operations.
-
-### 4. Reinforced AWS Bedrock Pareto Router & Recovery
-- **Multi-Objective Policy Profiles (`Frugal` / `Balanced` / `Frontier`)**: `ModelDecisionEngine` dynamically scores active non-legacy Bedrock models across capability fit, predicted token cost, and live EWMA Time-to-First-Token (TTFT), plus supports explicit manual model pinning.
-- **Cross-Region Inference Profiles (`us.*`) & Prompt Caching**: Discovers active Bedrock Inference Profiles via `ListInferenceProfilesCommand` to distribute burst throughput across US regions while reducing repeated prefix spend via `cachePoint` blocks.
-- **Cross-Provider Throttle Failover & FinOps-Bounded Tier Escalation**: Automatically fails over across providers (e.g., Anthropic → Qwen / Amazon Nova) on Bedrock `ThrottlingException` / 5xx with a 60s EWMA cooldown penalty, and escalates `+1` capability tier on compiler or unit-test verification failure bounded by a per-run FinOps spend ceiling.
-
-### 5. Durable Amazon SQS + DLQ + S3 Claim-Check Queueing
-- **Eliminates ECS 6KB Override Bottlenecks**: `SqsTaskQueue` automatically offloads large task/context payloads (`> 6,000` bytes) to KMS/AES-256 encrypted Amazon S3 (`ArtifactBucket`) and enqueues lightweight claim-check envelopes to `RunQueue`.
-- **Warm Fargate Long-Polling & Heartbeats**: ECS Fargate workers consume `RunQueue` via 20-second SQS long-polling (`WaitTimeSeconds: 20`) to eliminate container cold-start latency, renew `ChangeMessageVisibility` leases while healthy, and redrive poisoned tasks after 3 crashes to `RunQueueDlq`.
-
-### 6. Lyra Connect: Cross-Device Continuity (Spotify Connect for AI Agents)
-- **Continuous Session Handoff**: Cloud-native session continuity protocol allowing seamless handoff between VS Code, Antigravity IDE, Web Portal, and mobile devices.
-- **Sequence-Delta Synchronization (`sinceSeq`)**: Lightweight delta streams sync active generation state, plan DAG checkpoints, and virtual diffs across devices with zero dropped tokens or out-of-order mutations.
-
-### 7. Structured AWS CloudWatch EMF Observability
-- `CloudWatchEmfRegistry` emits zero-dependency AWS CloudWatch Embedded Metric Format (`_aws.CloudWatchMetrics`) payloads under namespace `Lyra/AgentHarness` (`TTFT_ms`, `TurnDuration_ms`, `EstimatedCostUsd`, `CacheHitRatioPct`, `FailoverCount`, `TierEscalation`, `QueueDepth`) and powers the live `/console` dashboard (Pareto savings vs. Frontier baseline, Prompt Cache hit ratio, and SQS/DLQ health).
-
----
-
-## Execution Topology
-
-```
-┌───────────────────────────────────────────────────────────────────┐
-│ 1. CLIENT LAYER (Zero Local Daemons · Lyra Connect)              │
-│    • VS Code & Antigravity Extension (lyra-swarm-1.3.0.vsix)      │
-│    • Native lyra-patch: Virtual Diff Preview & WorkspaceEdit      │
-│    • Web Portal & Cloud Console (/console)                        │
-└─────────────────────────────────┬─────────────────────────────────┘
-                                  │ AHP v1.3 (SSE Stream + JSON-RPC 2.0)
-┌─────────────────────────────────▼─────────────────────────────────┐
-│ 2. ADAPTIVE GATEWAY & PARETO ROUTER (:3001)                       │
-│    • IntentTriage (<1ms): Instant Ask · Fast Patch · Full Swarm   │
-│    • Multi-Model Council (Frontier · Security · FinOps)           │
-│    • ModelDecisionEngine (Frugal / Balanced / Frontier + EWMA)    │
-│    • Better Auth (Aurora/RDS Postgres + WebAuthn Passkeys + SES)  │
-└───────────────┬───────────────────────────────────┬───────────────┘
-    Lane 0 / 1  │ Direct ConverseStream             │ Lane 2 (>6KB S3 Claim-Check)
-                │ + Prompt Caching                  ▼
-                │                   ┌───────────────────────────────┐
-                │                   │ 3. AMAZON SQS + DLQ           │
-                │                   │    RunQueue (20s Long-Poll)   │
-                │                   │    Visibility Lease Heartbeats│
-                │                   └───────────────┬───────────────┘
-                ▼                                   ▼
-┌───────────────────────────────────────────────────────────────────┐
-│ 4. ISOLATED AWS BEDROCK & FARGATE EXECUTION                       │
-│    • Cross-Region Inference Profiles (us.*) + Auto-Failover       │
-│    • Pre-Warmed Git Worktrees + Risk-Gated Plan Auto-Approval     │
-│    • Proof Sandbox (Verification Gates · AST Invariants)          │
-│    • Autonomous Night Shift (Unattended Self-Healing Swarm)       │
-│    • CloudWatch EMF Telemetry (Namespace: Lyra/AgentHarness)      │
-└───────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Proven Case Study: Autonomous CollabCanvas Overhaul
-
-In empirical benchmark testing, Lyra's autonomous engine tackled **CollabCanvas**—a broken, minimal prototype with failing TypeScript compilation:
-- **Autonomous Night Shift Resolution**: Analyzed compiler logs, detected missing JSX configuration (`TS17004`), resolved recursive Quadtree imports, patched CRDT listener spread typings, and produced a **100% verified green build** in 85.7s.
-- **Production-Grade UI Elevation**: Upgraded the canvas to a FigJam/Miro-grade collaborative experience:
-  - FigJam-style bottom dock toolbar with 6 pastel color presets and undo/redo stacks.
-  - Floating top bar with editable board title, sync status indicator, and collaborator avatars.
-  - Viewport HUD with continuous zoom controls, world coordinates, and 1-click **Fit to Content** bounding box calculation.
-  - Tactile sticky notes with category tagging, 1-click color palette dial, duplicate/trash actions, and corner resize handles.
-  - Multiplayer cursor presence simulation and interactive keyboard shortcuts (`?`, `V`, `H`, `N`, `Cmd+D`, `Cmd+Z`).
-
----
-
-## Authentication & Passkey Sync
-
-Lyra features a unified authentication layer powered by **Better Auth**:
-- **AWS Cloud Storage**: In hosted environments, accounts, sessions, and passkeys persist in **Amazon RDS / Aurora PostgreSQL** (`infra/aws/template.yaml`) with transactional email handled by **Amazon SES** and secrets managed in **AWS Secrets Manager**. In local development, it falls back seamlessly to persistent SQLite (`server/data/auth.sqlite`).
-- **WebAuthn Passkeys**: Passwordless biometric authentication (Touch ID, Face ID, Windows Hello, YubiKey) via `@better-auth/passkey`.
-- **Cross-Surface Sync**: Session cookies and bearer sync tokens issued at `/account` authenticate REST endpoints, `/console` telemetry, AHP SSE streams, and the VS Code extension.
-
----
-
-## VS Code & Antigravity Extension (`v1.3.0`)
-
-Built strictly on native VS Code theme variables (`var(--vscode-*)`):
-- **Adaptive Mode & Policy Controls**: Switch between `Auto`, `Ask`, `Fast Patch`, and `Swarm` modes, select `Balanced`, `Frugal`, or `Frontier` Pareto profiles, or pin any active Bedrock model.
-- **Native Diff Preview & 1-Click Patch Apply**: Fast Patch turns stream surgical edits with `Apply Patch`, native side-by-side `Preview Diff` (`lyra-patch:`), optional `Auto-Apply`, and `1-Click Escalate to Swarm`.
-- **Cloud Sessions TreeView & Universal Chat**: Real-time `lyraCloudSessions` sidebar synced continuously across workstations via Lyra Connect.
-
-### Install Extension
 ```bash
-code --install-extension extensions/vscode/lyra-swarm-1.3.0.vsix
+bun install
 ```
 
----
+Start the Lyra HTTP + WebSocket server on port `3001`:
 
-## Active AWS Bedrock Pareto Catalog
-
-| Model | Provider | Cross-Region Profile / ID | Tier & Capabilities |
-| :--- | :--- | :--- | :--- |
-| **Claude Sonnet 5** | Anthropic | `us.anthropic.claude-sonnet-5` | Tier 3 · Frontier Implementation & Prompt Caching |
-| **Claude Opus 5.5** | Anthropic | `us.anthropic.claude-opus-5-5` | Tier 4 · Deep Architecture & Formal Reasoning |
-| **Claude Haiku 4.5** | Anthropic | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Tier 1 · Sub-400ms TTFT Instant Ask & Fast Patch |
-| **Amazon Nova 2 Lite** | Amazon | `us.amazon.nova-2-lite-v1:0` | Tier 1 · Frugal Triage ($0.06/M) & Scribe Docs |
-| **Amazon Nova Pro** | Amazon | `us.amazon.nova-pro-v1:0` | Tier 2 · 300k Multimodal Context & Coding |
-| **Qwen3 Coder 480B** | Qwen | `qwen.qwen3-coder-480b-a35b-v1:0` | Tier 3 · High-Precision Multi-File Refactoring |
-| **DeepSeek-R1** | DeepSeek | `us.deepseek.r1-v1:0` | Tier 4 · Algorithmic Proofs & Concurrency Invariants |
-| **Llama 3.3 70B** | Meta | `us.meta.llama3-3-70b-instruct-v1:0` | Tier 2 · Open-Weights Worktree Worker ($0.72/M) |
-
----
-
-## Quickstart & Verification
-
-### 1. Start Backend Gateway & Web Portal
 ```bash
-# Terminal 1: Launch Lyra Cloud Gateway (:3001)
-bun run server/index.ts
+bun run dev
+```
 
-# Terminal 2: Launch Web Portal & Cloud Console (:5173)
+Start the React web portal on port `5173` (optional):
+
+```bash
 cd site && bun run dev
 ```
-- **Overview & Live Model Registry**: `http://localhost:5173`
-- **Cloud Console (Sessions, Pareto FinOps & EMF Ledger)**: `http://localhost:5173/console`
-- **Architecture & System Design**: `http://localhost:5173/architecture`
-- **Interactive Documentation**: `http://localhost:5173/docs`
-- **Account & Passkey Login**: `http://localhost:5173/login`
 
-### 2. Autonomous Night Shift Verification Run
+Important URLs in local dev:
+
+- `http://localhost:3001/api/health` -- Hub liveness check
+- `http://localhost:3001/api/auth/status` -- Public auth provider capabilities
+- `http://localhost:5173` -- Web portal
+- `http://localhost:5173/console` -- Cloud console and telemetry view
+- `http://localhost:5173/login` -- Sign-in and passkey management
+
+## Deploying to Production
+
+### Cloudflare Containers (`https://lyra.2helix.org`)
+
+`cloudflare.config.ts` binds the Durable Object container (`LyraContainer` in `worker.ts`, built from `Dockerfile`) to `lyra-hub` on domain `lyra.2helix.org`.
+
 ```bash
-# Run autonomous unattended bug investigation and proof verification
-bun run scripts/lyra-nightshift.ts --workspace /path/to/repo --test "npm run build"
+bunx cf deploy
 ```
 
-### 3. Run Typecheck, Build & Test Suites
+Make sure secrets (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally `LYRA_GATEWAY_API_KEY`) are configured in Cloudflare Worker secrets so `worker.ts` forwards them into the container environment.
+
+### AWS Fargate Runner
+
 ```bash
-# Full TypeScript validation (backend + scripts)
-npx tsc --noEmit
+bun run deploy:aws
+```
 
-# Production Vite build for Web Portal
-cd site && npx vite build
+See [infra/aws/README.md](infra/aws/README.md) for CloudFormation stack parameters and VPC/EFS/RDS setup.
 
-# Adaptive 3-lane triage, Pareto failover/escalation, SQS Claim-Check & CloudWatch EMF tests
+## Environment Variables
+
+`server/index.ts` loads `.env.local` and `.env` on startup, and refreshes temporary AWS credentials via `aws configure export-credentials --format process` every 10 minutes when static AWS keys are absent.
+
+| Variable | Default / Fallback | Purpose |
+| :--- | :--- | :--- |
+| `PORT` / `LYRA_HUB_PORT` | `3001` | HTTP and WebSocket listen port (`worker.ts` uses `3001`) |
+| `BETTER_AUTH_URL` | `http://localhost:3001` | Public base URL (`https://lyra.2helix.org` in production) |
+| `BETTER_AUTH_SECRET` | Auto-generated in `server/data/.auth-secret` | Session signing secret (set explicitly in production) |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Local dev ports + `tauri://localhost` | Comma-separated extra allowed origins |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | unset | Enables Google OAuth (`googleEnabled: true`) |
+| `LYRA_HOSTED` | unset (`false`) | Enables hosted security mode (`true` in `worker.ts`) |
+| `LYRA_AUTH_DISABLE_SIGNUP` | unset (`false`) | Set to `true` to disable new self-service registrations |
+| `LYRA_GATEWAY_API_KEY` | unset | Static API key accepted alongside Better Auth sessions |
+| `AWS_REGION` | `us-east-1` | Region for Bedrock, Secrets Manager, SES, SQS, and ECS |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CLI credential export | Credentials for AWS Bedrock `ConverseStreamCommand` |
+| `OPENROUTER_API_KEY` | unset | API key for upstream OpenRouter models |
+| `LYRA_DATABASE_HOST` (+ `PORT`/`NAME`/`USER`/`PASSWORD`) | SQLite fallback | Switches Better Auth to AWS PostgreSQL (`auth` schema) |
+
+## Testing and Typechecking
+
+```bash
+# TypeScript validation
+bun run typecheck
+
+# Gateway, auth, routing, and coordinator unit tests
 bun test server/adaptivePipeline.test.ts server/ahpProtocol.test.ts server/gateway.test.ts server/ecsNativeDispatcher.test.ts server/bedrockModelCatalog.test.ts server/modelDecisionEngine.test.ts server/teamCoordinator.test.ts
 ```
 
----
+## Further Documentation
 
-## License
-Engineered under the Apache 2.0 License.
+- [docs/api.md](docs/api.md) -- HTTP, SSE gateway, Better Auth handoff, and WebSocket endpoints
+- [docs/architecture-and-features.md](docs/architecture-and-features.md) -- System architecture, routing, worktrees, and AWS integrations
+- [docs/product-spec.md](docs/product-spec.md) -- Native Strands coding harness specification
+- [infra/aws/README.md](infra/aws/README.md) -- AWS infrastructure templates and deployment notes
