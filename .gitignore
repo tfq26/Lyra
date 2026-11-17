@@ -52,3 +52,5 @@ server/data/
 .auth-secret
 
 
+
+.cloudflare/

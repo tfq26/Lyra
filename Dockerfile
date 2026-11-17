@@ -4,7 +4,6 @@ ARG INSTALL_ANTIGRAVITY=false
 ARG INSTALL_CODEX=false
 ARG INSTALL_CLAUDE=false
 ARG INSTALL_OPENCODE=false
-ARG INSTALL_HERMES=false
 
 ENV DEBIAN_FRONTEND=noninteractive \
     BUN_INSTALL=/root/.bun \
@@ -20,17 +19,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fi \
     && if [ "$INSTALL_CODEX" = "true" ]; then npm install --global @openai/codex; fi \
     && if [ "$INSTALL_CLAUDE" = "true" ]; then npm install --global @anthropic-ai/claude-code; fi \
-    && if [ "$INSTALL_OPENCODE" = "true" ]; then npm install --global opencode-ai; fi \
-    && if [ "$INSTALL_HERMES" = "true" ]; then curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash; fi
+    && if [ "$INSTALL_OPENCODE" = "true" ]; then npm install --global opencode-ai; fi
 
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install || npm install --include=dev --legacy-peer-deps --no-audit --no-fund
 ARG CACHEBUST=1
 COPY . .
-RUN bun run build
 
-RUN mkdir -p /workspace /data/lyra /root/.gemini /root/.codex /root/.claude /root/.config/opencode /root/.hermes
+RUN mkdir -p /workspace /data/lyra /root/.gemini /root/.codex /root/.claude /root/.config/opencode
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

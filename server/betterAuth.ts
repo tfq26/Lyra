@@ -137,6 +137,13 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
     secret,
     database: databaseConfig,
     trustedOrigins,
+    account: {
+      accountLinking: {
+        enabled: true,
+        trustedProviders: ['google'],
+        requireLocalEmailVerified: false,
+      },
+    },
     socialProviders:
       googleClientId && googleClientSecret
         ? {

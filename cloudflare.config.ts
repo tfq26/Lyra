@@ -1,0 +1,32 @@
+import { bindings, defineConfig, defineContainer, exports } from 'cf/config';
+import * as entrypoint from './worker.ts' with { type: 'cf-worker' };
+
+const lyraContainer = defineContainer({
+  name: 'lyra-hub-container',
+  image: { dockerfile: './Dockerfile' },
+  instanceType: 'standard-1',
+  maxInstances: 2,
+});
+
+export default defineConfig({
+  accountId: 'bdfb4d698ccb82a56a92f8943abe5e47',
+  containers: [lyraContainer],
+  worker: {
+    name: 'lyra-hub',
+    entrypoint,
+    compatibilityDate: '2026-11-01',
+    domains: ['lyra.2helix.org'],
+    exports: {
+      LyraContainer: exports.durableObject({
+        storage: 'sqlite',
+        container: lyraContainer,
+      }),
+    },
+    env: {
+      LYRA_CONTAINER: bindings.durableObject({
+        worker: 'lyra-hub',
+        exportName: 'LyraContainer',
+      }),
+    },
+  },
+});

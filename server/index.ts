@@ -240,6 +240,88 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/auth/gram-start' && req.method === 'GET' && getBetterAuthRuntime()) {
+    const requestedRedirect = url.searchParams.get('redirect') || 'http://localhost:7337/';
+    let safeRedirect = 'http://localhost:7337/';
+    try {
+      const parsedRedirect = new URL(requestedRedirect);
+      const allowedHosts = new Set(['localhost', '127.0.0.1']);
+      const extraOrigins = [process.env.GRAM_PUBLIC_URL, ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS || '').split(',')]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value));
+      const isTrustedExtra = extraOrigins.some((origin) => {
+        try {
+          return new URL(origin).origin === parsedRedirect.origin;
+        } catch {
+          return false;
+        }
+      });
+      if (allowedHosts.has(parsedRedirect.hostname) || isTrustedExtra) {
+        safeRedirect = parsedRedirect.toString();
+      }
+    } catch {}
+
+    const baseUrl = process.env.BETTER_AUTH_URL || `https://${req.headers.host || 'lyra.2helix.org'}`;
+    const handoffUrl = `${baseUrl.replace(/\/+$/, '')}/api/auth/gram-handoff?redirect=${encodeURIComponent(safeRedirect)}`;
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Connecting to Google…</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0e0f10; color: #ececec; font-family: -apple-system, BlinkMacSystemFont, "Inter", sans-serif; }
+  .box { text-align: center; padding: 28px; }
+  p { margin: 14px 0 0; font-size: 13.5px; color: #9ca3af; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <svg width="44" height="44" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="ls-p1" x1="18" y1="8" x2="54" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#34D399"/><stop offset="100%" stop-color="#0EA5E9"/></linearGradient>
+        <linearGradient id="ls-p2" x1="18" y1="8" x2="54" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#A78BFA"/><stop offset="100%" stop-color="#38BDF8"/></linearGradient>
+        <linearGradient id="ls-p3" x1="18" y1="8" x2="54" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#FB7185"/></linearGradient>
+      </defs>
+      <g transform="translate(32 32) scale(1.18) translate(-32 -32)">
+        <g transform="rotate(0 32 32)"><path fill="url(#ls-p1)" d="M32.5 8.5c12.4 0 21 8.8 21 20.6 0 1.6-1.6 2.6-3 1.8-4.2-2.3-7.4-5.4-9.8-9.3-2.5-4-6-6.2-10.2-6.2-2.9 0-5.4.8-7.4 2.2-1.3.9-2.8-.4-2.1-1.8C23.1 11.4 27.4 8.5 32.5 8.5z"/></g>
+        <g transform="rotate(120 32 32)"><path fill="url(#ls-p2)" d="M32.5 8.5c12.4 0 21 8.8 21 20.6 0 1.6-1.6 2.6-3 1.8-4.2-2.3-7.4-5.4-9.8-9.3-2.5-4-6-6.2-10.2-6.2-2.9 0-5.4.8-7.4 2.2-1.3.9-2.8-.4-2.1-1.8C23.1 11.4 27.4 8.5 32.5 8.5z"/></g>
+        <g transform="rotate(240 32 32)"><path fill="url(#ls-p3)" d="M32.5 8.5c12.4 0 21 8.8 21 20.6 0 1.6-1.6 2.6-3 1.8-4.2-2.3-7.4-5.4-9.8-9.3-2.5-4-6-6.2-10.2-6.2-2.9 0-5.4.8-7.4 2.2-1.3.9-2.8-.4-2.1-1.8C23.1 11.4 27.4 8.5 32.5 8.5z"/></g>
+      </g>
+    </svg>
+    <p id="status">Continuing with Google…</p>
+  </div>
+  <script>
+    (async function () {
+      const status = document.getElementById('status');
+      try {
+        const res = await fetch('/api/auth/sign-in/social', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: 'google',
+            callbackURL: ${JSON.stringify(handoffUrl)},
+            disableRedirect: true
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data || !data.url) {
+          throw new Error(data && (data.message || data.error) || 'Google sign-in failed to start.');
+        }
+        window.location.replace(data.url);
+      } catch (err) {
+        status.textContent = (err && err.message) ? err.message : 'Unable to start Google sign-in.';
+      }
+    })();
+  </script>
+</body>
+</html>`;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(html);
+    return;
+  }
+
   if (url.pathname === '/api/auth/gram-handoff' && req.method === 'GET' && getBetterAuthRuntime()) {
     const requestedRedirect = url.searchParams.get('redirect') || 'http://localhost:7337/';
     let safeRedirect = 'http://localhost:7337/';

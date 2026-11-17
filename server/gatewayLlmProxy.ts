@@ -261,8 +261,19 @@ export async function handleGatewayLlmStream(
     Connection: 'keep-alive',
   });
 
+  const startedAt = Date.now();
+  let abortReason: string | undefined;
   const abortController = new AbortController();
-  req.on('close', () => abortController.abort());
+  req.on('aborted', () => {
+    abortReason = 'client_request_aborted';
+    abortController.abort('client_request_aborted');
+  });
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      abortReason = 'client_response_closed';
+      abortController.abort('client_response_closed');
+    }
+  });
 
   try {
     const tools = Array.isArray(body.tools) ? body.tools : [];
@@ -461,7 +472,26 @@ export async function handleGatewayLlmStream(
     sendSse(res, { type: 'done', result: { text, thinking, toolCalls, stopReason, usage } });
     res.end();
   } catch (err: any) {
-    sendSse(res, { type: 'error', message: err?.message || 'Gateway LLM stream failed.' });
+    sendSse(res, {
+      type: 'error',
+      message: err?.message || 'Gateway LLM stream failed.',
+      diagnostics: {
+        source: 'lyra-gateway',
+        provider: resolvedProvider,
+        model: body.model,
+        privacyMode,
+        effort: body.effort || 'medium',
+        aborted: abortController.signal.aborted,
+        abortReason:
+          abortReason ||
+          (abortController.signal.reason !== undefined ? String(abortController.signal.reason) : undefined),
+        errorName: err?.name,
+        errorCode: err?.code,
+        httpStatusCode: err?.$metadata?.httpStatusCode,
+        awsRequestId: err?.$metadata?.requestId,
+        elapsedMs: Date.now() - startedAt,
+      },
+    });
     res.end();
   }
 }
