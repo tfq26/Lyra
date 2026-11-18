@@ -13,6 +13,7 @@ import { NativeAgentRuntime } from './nativeAgentRuntime';
 import { saveProviderCredential } from './providerSecrets';
 import { ModelCompatibilityService } from './modelCompatibility';
 import { PostgresEventJournal } from './postgresEventJournal';
+import { resolvePostgresConfig } from './postgresConfig';
 import { EcsNativeDispatcher } from './ecsNativeDispatcher';
 import { PreviewManager } from './previewManager';
 import { WorktreeManager } from './worktreeManager';
@@ -39,6 +40,7 @@ import { RunnerPool } from './runnerPool';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 import { handleGatewayLlmStream, listGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
+import { sharedContextOptimizer } from './contextOptimizer';
 
 const PORT = 3001;
 
@@ -137,14 +139,15 @@ setInterval(() => {
 }, 15_000).unref();
 const processManager = new ProcessManager();
 const messageBus = new MessageBus();
-const eventJournal = process.env.LYRA_DATABASE_HOST
+const pgConfig = resolvePostgresConfig();
+const eventJournal = pgConfig
   ? new PostgresEventJournal(process.env.LYRA_TENANT_ID || 'local', {
-      host: process.env.LYRA_DATABASE_HOST,
-      port: Number(process.env.LYRA_DATABASE_PORT || 5432),
-      database: process.env.LYRA_DATABASE_NAME || 'lyra',
-      username: process.env.LYRA_DATABASE_USER || 'lyra',
-      password: process.env.LYRA_DATABASE_PASSWORD || '',
-      ssl: process.env.LYRA_DATABASE_SSL !== 'false',
+      host: pgConfig.host,
+      port: pgConfig.port,
+      database: pgConfig.database,
+      username: pgConfig.user,
+      password: pgConfig.password,
+      ssl: pgConfig.ssl,
     })
   : undefined;
 const nativeAgentRuntime = new NativeAgentRuntime(store, () => eventJournal?.waitForWrites() || Promise.resolve());
@@ -510,6 +513,21 @@ const server = http.createServer(async (req, res) => {
       const privacyMode = (url.searchParams.get('privacyMode') as PrivacyMode) || (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(listGatewayLlmModels(privacyMode)));
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/gateway/context/') && req.method === 'GET') {
+      const blobId = decodeURIComponent(url.pathname.slice('/api/gateway/context/'.length)).trim();
+      if (!blobId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing context blob id' }));
+        return;
+      }
+      const startLine = url.searchParams.get('startLine') ? Number(url.searchParams.get('startLine')) : undefined;
+      const endLine = url.searchParams.get('endLine') ? Number(url.searchParams.get('endLine')) : undefined;
+      const result = await sharedContextOptimizer.retrieveBlob(blobId, { startLine, endLine });
+      res.writeHead(result.found ? 200 : 404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
       return;
     }
 
@@ -934,7 +952,7 @@ const server = http.createServer(async (req, res) => {
           infrastructure: {
             hosted: process.env.LYRA_HOSTED === 'true',
             region: process.env.AWS_REGION || 'us-east-2',
-            authStore: process.env.LYRA_DATABASE_HOST ? 'aws-rds-postgres' : 'local-sqlite',
+            authStore: resolvePostgresConfig() ? 'postgres' : 'local-sqlite',
             fargateConfigured: ecsNativeDispatcher.isConfigured(),
             sqsMode: queue.mode,
             emfNamespace: telemetry.namespace,
@@ -2732,7 +2750,13 @@ server.on('error', (err: any) => {
 async function startServer() {
   const betterAuth = await initializeBetterAuth();
   if (process.env.LYRA_HOSTED === 'true' && !betterAuth) throw new Error('Hosted Lyra requires Better Auth backed by PostgreSQL.');
-  if (eventJournal) await eventJournal.initialize(store);
+  if (eventJournal) {
+    await eventJournal.initialize(store);
+    sharedContextOptimizer.setPersistHook({
+      save: (blob) => eventJournal.saveContextBlob(blob),
+      load: (id) => eventJournal.loadContextBlob(id),
+    });
+  }
   for (const checkpoint of store.listInterruptedAgentRuns()) {
     if (process.env.LYRA_HOSTED === 'true' && await ecsNativeDispatcher.isRunRunning(checkpoint.runId)) {
       ecsNativeDispatcher.restoreActive(checkpoint.sessionId, checkpoint.runId);

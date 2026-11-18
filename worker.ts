@@ -9,6 +9,14 @@ export interface Env {
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;
   AWS_REGION?: string;
+  DATABASE_URL?: string;
+  LYRA_DATABASE_URL?: string;
+  LYRA_DATABASE_HOST?: string;
+  LYRA_DATABASE_PORT?: string;
+  LYRA_DATABASE_NAME?: string;
+  LYRA_DATABASE_USER?: string;
+  LYRA_DATABASE_PASSWORD?: string;
+  LYRA_DATABASE_SSL?: string;
 }
 
 export class LyraContainer extends Container<Env> {
@@ -29,13 +37,21 @@ export class LyraContainer extends Container<Env> {
       ...(env.AWS_ACCESS_KEY_ID ? { AWS_ACCESS_KEY_ID: env.AWS_ACCESS_KEY_ID } : {}),
       ...(env.AWS_SECRET_ACCESS_KEY ? { AWS_SECRET_ACCESS_KEY: env.AWS_SECRET_ACCESS_KEY } : {}),
       ...(env.AWS_REGION ? { AWS_REGION: env.AWS_REGION } : {}),
+      ...(env.DATABASE_URL ? { DATABASE_URL: env.DATABASE_URL } : {}),
+      ...(env.LYRA_DATABASE_URL ? { LYRA_DATABASE_URL: env.LYRA_DATABASE_URL } : {}),
+      ...(env.LYRA_DATABASE_HOST ? { LYRA_DATABASE_HOST: env.LYRA_DATABASE_HOST } : {}),
+      ...(env.LYRA_DATABASE_PORT ? { LYRA_DATABASE_PORT: env.LYRA_DATABASE_PORT } : {}),
+      ...(env.LYRA_DATABASE_NAME ? { LYRA_DATABASE_NAME: env.LYRA_DATABASE_NAME } : {}),
+      ...(env.LYRA_DATABASE_USER ? { LYRA_DATABASE_USER: env.LYRA_DATABASE_USER } : {}),
+      ...(env.LYRA_DATABASE_PASSWORD ? { LYRA_DATABASE_PASSWORD: env.LYRA_DATABASE_PASSWORD } : {}),
+      ...(env.LYRA_DATABASE_SSL ? { LYRA_DATABASE_SSL: env.LYRA_DATABASE_SSL } : {}),
     };
   }
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const container = getContainer(env.LYRA_CONTAINER, 'primary-v5');
+    const container = getContainer(env.LYRA_CONTAINER, 'primary-v10');
     return container.fetch(request);
   },
 };

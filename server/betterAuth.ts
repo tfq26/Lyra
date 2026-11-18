@@ -10,6 +10,7 @@ import { Database } from 'bun:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { IncomingHttpHeaders } from 'node:http';
+import { resolvePostgresConfig } from './postgresConfig';
 
 export type BetterAuthInstance = ReturnType<typeof betterAuth<any>>;
 export interface LyraBetterAuthRuntime {
@@ -76,19 +77,19 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
     baseURL = `http://localhost:${process.env.LYRA_HUB_PORT || '3001'}`;
   }
 
-  const isHostedAws = Boolean(process.env.LYRA_DATABASE_HOST);
+  const pgConfig = resolvePostgresConfig();
+  const isHostedAws = Boolean(pgConfig);
   let databaseConfig: any;
 
-  if (isHostedAws) {
-    // AWS Aurora / RDS PostgreSQL
-    console.log(`[Lyra Auth] Initializing Better Auth with AWS PostgreSQL (${process.env.LYRA_DATABASE_HOST})...`);
+  if (pgConfig) {
+    console.log(`[Lyra Auth] Initializing Better Auth with PostgreSQL (${pgConfig.host}:${pgConfig.port}/${pgConfig.database})...`);
     pool = new Pool({
-      host: process.env.LYRA_DATABASE_HOST,
-      port: Number(process.env.LYRA_DATABASE_PORT || 5432),
-      database: process.env.LYRA_DATABASE_NAME || 'lyra',
-      user: process.env.LYRA_DATABASE_USER || 'lyra',
-      password: process.env.LYRA_DATABASE_PASSWORD,
-      ssl: process.env.LYRA_DATABASE_SSL === 'false' ? undefined : { rejectUnauthorized: false },
+      host: pgConfig.host,
+      port: pgConfig.port,
+      database: pgConfig.database,
+      user: pgConfig.user,
+      password: pgConfig.password,
+      ssl: pgConfig.ssl ? { rejectUnauthorized: false } : undefined,
       max: 5,
       idleTimeoutMillis: 30_000,
     });

@@ -2,6 +2,9 @@
 **/dist
 **/.git
 **/.DS_Store
+.env*
+server/data/*.sqlite*
+server/data/.auth-secret
 src-tauri/target
 *.log
 *.vsix

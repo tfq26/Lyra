@@ -17,7 +17,8 @@ import {
   type SystemContentBlock,
   type Tool,
 } from '@aws-sdk/client-bedrock-runtime';
-import { BEDROCK_CATALOG } from './modelDecisionEngine';
+import { BEDROCK_CATALOG, ModelDecisionEngine, type ModelProfile } from './modelDecisionEngine';
+import { sharedContextOptimizer } from './contextOptimizer';
 import { redactSecretText } from './security';
 
 export type PrivacyMode = 'standard' | 'zdr' | 'local-only';
@@ -40,6 +41,8 @@ export interface GatewayLlmToolDef {
 
 export interface GatewayLlmStreamRequest {
   model: string;
+  sessionId?: string;
+  mode?: 'chat' | 'plan' | 'code';
   provider?: 'bedrock' | 'openrouter' | 'openai-compat';
   privacyMode?: PrivacyMode;
   effort?: 'low' | 'medium' | 'high';
@@ -112,7 +115,7 @@ function getBedrockClient(): BedrockRuntimeClient {
   return cachedBedrockClient;
 }
 
-function toBedrockMessages(messages: GatewayLlmMessage[]): Message[] {
+function toBedrockMessages(messages: GatewayLlmMessage[], allowToolBlocks = true): Message[] {
   return messages.map((msg) => {
     if (typeof msg.content === 'string') {
       return { role: msg.role, content: [{ text: redactSecretText(msg.content) || ' ' }] };
@@ -122,15 +125,25 @@ function toBedrockMessages(messages: GatewayLlmMessage[]): Message[] {
       if (block.type === 'text') {
         blocks.push({ text: redactSecretText(block.text) || ' ' });
       } else if (block.type === 'tool_use') {
-        blocks.push({ toolUse: { toolUseId: block.id, name: block.name, input: block.input as any } });
+        if (allowToolBlocks) {
+          blocks.push({ toolUse: { toolUseId: block.id, name: block.name, input: block.input as any } });
+        } else {
+          blocks.push({ text: `[Tool call ${block.name}: ${redactSecretText(JSON.stringify(block.input || {}))}]` });
+        }
       } else if (block.type === 'tool_result') {
-        blocks.push({
-          toolResult: {
-            toolUseId: block.toolUseId,
-            content: [{ text: redactSecretText(block.content) || '(empty)' }],
-            status: block.isError ? 'error' : 'success',
-          },
-        });
+        if (allowToolBlocks) {
+          blocks.push({
+            toolResult: {
+              toolUseId: block.toolUseId,
+              content: [{ text: redactSecretText(block.content) || '(empty)' }],
+              status: block.isError ? 'error' : 'success',
+            },
+          });
+        } else {
+          blocks.push({
+            text: `[Tool result (${block.isError ? 'error' : 'ok'}): ${redactSecretText(block.content) || '(empty)'}]`,
+          });
+        }
       }
     }
     if (blocks.length === 0) blocks.push({ text: ' ' });
@@ -263,6 +276,7 @@ export async function handleGatewayLlmStream(
 
   const startedAt = Date.now();
   let abortReason: string | undefined;
+  let activeModelId = body.model;
   const abortController = new AbortController();
   req.on('aborted', () => {
     abortReason = 'client_request_aborted';
@@ -278,85 +292,184 @@ export async function handleGatewayLlmStream(
   try {
     const tools = Array.isArray(body.tools) ? body.tools : [];
     const maxTokens = body.effort === 'high' ? 8192 : body.effort === 'low' ? 2048 : 4096;
+    const sessionIdHeader = Array.isArray(req.headers['x-lyra-session-id'])
+      ? req.headers['x-lyra-session-id'][0]
+      : req.headers['x-lyra-session-id'];
+    const optimized = sharedContextOptimizer.optimizeGatewayTurn({
+      sessionId: body.sessionId || sessionIdHeader,
+      messages: body.messages || [],
+    });
+    const optimizedMessages = optimized.messages;
 
     if (resolvedProvider === 'bedrock') {
       const client = getBedrockClient();
-      const catalogEntry = BEDROCK_CATALOG.find(
-        (m) => m.id === body.model || m.inferenceProfileId === body.model
-      );
-      const supportsCaching = body.supportsPromptCaching ?? catalogEntry?.supportsPromptCaching ?? true;
-      const cleanSystem = redactSecretText(body.systemPrompt || '');
-      const systemBlocks: SystemContentBlock[] = cleanSystem ? [{ text: cleanSystem }] : [];
-      if (supportsCaching && cleanSystem.length >= 1024) {
-        systemBlocks.push({ cachePoint: { type: 'default' } } as SystemContentBlock);
-      }
-
-      const command = new ConverseStreamCommand({
-        modelId: body.model,
-        system: systemBlocks.length > 0 ? systemBlocks : undefined,
-        messages: toBedrockMessages(body.messages || []),
-        toolConfig:
-          tools.length > 0
-            ? { tools: toBedrockTools(tools, supportsCaching && tools.length >= 2) }
-            : undefined,
-        inferenceConfig: { maxTokens, temperature: 0.2 },
-      });
-
-      const response = await client.send(command, { abortSignal: abortController.signal });
-      let text = '';
-      let thinking = '';
-      let stopReason = 'end_turn';
-      let usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } | undefined;
-      const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-      const activeTools = new Map<number, { id: string; name: string; rawInput: string }>();
-
-      if (response.stream) {
-        for await (const event of response.stream) {
-          if (event.contentBlockStart?.start?.toolUse) {
-            const idx = event.contentBlockStart.contentBlockIndex ?? 0;
-            activeTools.set(idx, {
-              id: event.contentBlockStart.start.toolUse.toolUseId || `tool_${idx}`,
-              name: event.contentBlockStart.start.toolUse.name || 'unknown',
-              rawInput: '',
-            });
-          } else if (event.contentBlockDelta?.delta) {
-            const delta = event.contentBlockDelta.delta as any;
-            const idx = event.contentBlockDelta.contentBlockIndex ?? 0;
-            if (typeof delta.text === 'string' && delta.text) {
-              text += delta.text;
-              sendSse(res, { type: 'text_delta', delta: delta.text });
-            } else if (delta.reasoningContent?.text) {
-              thinking += delta.reasoningContent.text;
-              sendSse(res, { type: 'thinking_delta', delta: delta.reasoningContent.text });
-            } else if (delta.toolUse?.input) {
-              const entry = activeTools.get(idx);
-              if (entry) entry.rawInput += delta.toolUse.input;
-            }
-          } else if (event.contentBlockStop) {
-            const idx = event.contentBlockStop.contentBlockIndex ?? 0;
-            const entry = activeTools.get(idx);
-            if (entry) {
-              let parsed: Record<string, unknown> = {};
-              try { parsed = entry.rawInput ? JSON.parse(entry.rawInput) : {}; } catch {}
-              toolCalls.push({ id: entry.id, name: entry.name, input: parsed });
-              activeTools.delete(idx);
-            }
-          } else if (event.messageStop?.stopReason) {
-            stopReason = event.messageStop.stopReason;
-          } else if (event.metadata?.usage) {
-            usage = {
-              inputTokens: event.metadata.usage.inputTokens ?? 0,
-              outputTokens: event.metadata.usage.outputTokens ?? 0,
-              cacheReadTokens: (event.metadata.usage as any).cacheReadInputTokens ?? 0,
-              cacheWriteTokens: (event.metadata.usage as any).cacheWriteInputTokens ?? 0,
-            };
+      const extractLastUserPrompt = (): string => {
+        const msgs = body.messages || [];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (!m || m.role !== 'user') continue;
+          if (typeof m.content === 'string' && m.content.trim()) return m.content.trim();
+          if (Array.isArray(m.content)) {
+            const textPart = m.content.find((b) => b.type === 'text' && b.text?.trim());
+            if (textPart && textPart.type === 'text') return textPart.text.trim();
           }
+        }
+        return 'General coding question';
+      };
+
+      const isAuto = body.model === 'auto';
+      let candidates: ModelProfile[] = [];
+      if (isAuto) {
+        const decision = ModelDecisionEngine.decideOptimalModel({
+          prompt: extractLastUserPrompt(),
+          lane: body.mode === 'chat' ? 'ask' : 'fast-patch',
+          role: body.mode === 'plan' ? 'planner' : 'coder',
+          policyProfile:
+            body.effort === 'high' ? 'frontier' : body.effort === 'low' ? 'frugal' : 'balanced',
+        });
+        candidates = [decision.selectedModel, ...decision.failoverChain];
+      } else {
+        const catalogEntry = ModelDecisionEngine.findModelProfile(body.model);
+        if (catalogEntry) {
+          candidates = [catalogEntry];
         }
       }
 
-      sendSse(res, { type: 'done', result: { text, thinking, toolCalls, stopReason, usage } });
-      res.end();
-      return;
+      const candidateIds =
+        candidates.length > 0
+          ? candidates.map((m) => m.inferenceProfileId || m.id)
+          : [body.model];
+
+      let lastErr: any = null;
+      for (let cIdx = 0; cIdx < candidateIds.length; cIdx++) {
+        const candidateId = candidateIds[cIdx]!;
+        activeModelId = candidateId;
+        const catalogEntry = candidates[cIdx] || ModelDecisionEngine.findModelProfile(candidateId);
+        const supportsCaching = body.supportsPromptCaching ?? catalogEntry?.supportsPromptCaching ?? true;
+        const isAnthropic = candidateId.includes('anthropic') || candidateId.includes('claude');
+        const supportsSystemCache = supportsCaching && (isAnthropic || candidateId.includes('amazon.nova'));
+        const supportsToolsCache = supportsCaching && isAnthropic;
+        const cleanSystem = redactSecretText(body.systemPrompt || '');
+        const systemBlocks: SystemContentBlock[] = cleanSystem ? [{ text: cleanSystem }] : [];
+        if (supportsSystemCache && cleanSystem.length >= 1024) {
+          systemBlocks.push({ cachePoint: { type: 'default' } } as SystemContentBlock);
+        }
+        if (optimized.workingSetBlock) {
+          systemBlocks.push({ text: optimized.workingSetBlock });
+        }
+
+        const command = new ConverseStreamCommand({
+          modelId: candidateId,
+          system: systemBlocks.length > 0 ? systemBlocks : undefined,
+          messages: toBedrockMessages(optimizedMessages, tools.length > 0),
+          toolConfig:
+            tools.length > 0
+              ? { tools: toBedrockTools(tools, supportsToolsCache && tools.length >= 2) }
+              : undefined,
+          inferenceConfig: { maxTokens, temperature: 0.2 },
+        });
+
+        let text = '';
+        let thinking = '';
+        let stopReason = 'end_turn';
+        let usage:
+          | { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+          | undefined;
+        const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+        const activeTools = new Map<number, { id: string; name: string; rawInput: string }>();
+
+        try {
+          const response = await client.send(command, { abortSignal: abortController.signal });
+          if (response.stream) {
+            for await (const event of response.stream) {
+              if (event.contentBlockStart?.start?.toolUse) {
+                const idx = event.contentBlockStart.contentBlockIndex ?? 0;
+                activeTools.set(idx, {
+                  id: event.contentBlockStart.start.toolUse.toolUseId || `tool_${idx}`,
+                  name: event.contentBlockStart.start.toolUse.name || 'unknown',
+                  rawInput: '',
+                });
+              } else if (event.contentBlockDelta?.delta) {
+                const delta = event.contentBlockDelta.delta as any;
+                const idx = event.contentBlockDelta.contentBlockIndex ?? 0;
+                if (typeof delta.text === 'string' && delta.text) {
+                  text += delta.text;
+                  sendSse(res, { type: 'text_delta', delta: delta.text });
+                } else if (delta.reasoningContent?.text) {
+                  thinking += delta.reasoningContent.text;
+                  sendSse(res, { type: 'thinking_delta', delta: delta.reasoningContent.text });
+                } else if (delta.toolUse?.input) {
+                  const entry = activeTools.get(idx);
+                  if (entry) entry.rawInput += delta.toolUse.input;
+                }
+              } else if (event.contentBlockStop) {
+                const idx = event.contentBlockStop.contentBlockIndex ?? 0;
+                const entry = activeTools.get(idx);
+                if (entry) {
+                  let parsed: Record<string, unknown> = {};
+                  try {
+                    parsed = entry.rawInput ? JSON.parse(entry.rawInput) : {};
+                  } catch {}
+                  toolCalls.push({ id: entry.id, name: entry.name, input: parsed });
+                  activeTools.delete(idx);
+                }
+              } else if (event.messageStop?.stopReason) {
+                stopReason = event.messageStop.stopReason;
+              } else if (event.metadata?.usage) {
+                usage = {
+                  inputTokens: event.metadata.usage.inputTokens ?? 0,
+                  outputTokens: event.metadata.usage.outputTokens ?? 0,
+                  cacheReadTokens: (event.metadata.usage as any).cacheReadInputTokens ?? 0,
+                  cacheWriteTokens: (event.metadata.usage as any).cacheWriteInputTokens ?? 0,
+                };
+              }
+            }
+          }
+
+          sendSse(res, {
+            type: 'done',
+            result: {
+              text,
+              thinking,
+              toolCalls,
+              stopReason,
+              usage,
+              resolvedModelId: activeModelId,
+              contextOptimization: optimized.stats,
+            },
+          });
+          res.end();
+          return;
+        } catch (err: any) {
+          lastErr = err;
+          const errName = String(err?.name || '');
+          const errMsg = String(err?.message || '');
+          const status = err?.$metadata?.httpStatusCode;
+          const isAccessDenied =
+            errName === 'AccessDeniedException' ||
+            status === 403 ||
+            /not available for this account|not authorized|model.*not found|end of life/i.test(errMsg);
+          const isThrottle =
+            errName === 'ThrottlingException' ||
+            status === 429 ||
+            /too many requests|throttl/i.test(errMsg);
+          if (isAccessDenied) {
+            ModelDecisionEngine.markAccessDenied(candidateId);
+          }
+          const canRetry =
+            isAuto &&
+            !abortController.signal.aborted &&
+            !text &&
+            !thinking &&
+            cIdx < candidateIds.length - 1 &&
+            (isAccessDenied || isThrottle);
+          if (canRetry) {
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (lastErr) throw lastErr;
     }
 
     // OpenRouter / OpenAI-compat / Ollama SSE proxy
@@ -379,9 +492,10 @@ export async function handleGatewayLlmStream(
     };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
+    const effectiveSystem = [body.systemPrompt || '', optimized.workingSetBlock].filter(Boolean).join('\n\n');
     const requestBody: Record<string, unknown> = {
       model: upstreamModelId,
-      messages: toOpenAiMessages(body.systemPrompt || '', body.messages || [], useAnthropicCache),
+      messages: toOpenAiMessages(effectiveSystem, optimizedMessages, useAnthropicCache),
       tools: tools.length > 0
         ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }))
         : undefined,
@@ -478,7 +592,8 @@ export async function handleGatewayLlmStream(
       diagnostics: {
         source: 'lyra-gateway',
         provider: resolvedProvider,
-        model: body.model,
+        model: activeModelId,
+        requestedModel: body.model,
         privacyMode,
         effort: body.effort || 'medium',
         aborted: abortController.signal.aborted,

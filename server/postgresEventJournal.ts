@@ -65,6 +65,13 @@ export class PostgresEventJournal {
       PRIMARY KEY (tenant_id, user_id, session_id, run_id)
     )`;
     await this.sql`CREATE INDEX IF NOT EXISTS lyra_synced_tasks_seq_idx ON lyra_synced_tasks (tenant_id, user_id, sequence)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS lyra_context_blobs (
+      blob_id text PRIMARY KEY,
+      session_id text,
+      modality text NOT NULL DEFAULT 'text',
+      content text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`;
     if (migrateLocalEvents) {
       for (const session of store.listSessions()) {
         const data = store.getSession(session.id);
@@ -93,6 +100,17 @@ export class PostgresEventJournal {
   public async waitForWrites(): Promise<void> {
     await Promise.all([...this.writes]);
     if (this.writeFailure) throw new Error(`PostgreSQL event persistence failed: ${this.writeFailure.message}`);
+  }
+
+  public async saveContextBlob(blob: { id: string; sessionId?: string; modality: string; content: string }): Promise<void> {
+    await this.sql`INSERT INTO lyra_context_blobs (blob_id, session_id, modality, content)
+      VALUES (${blob.id}, ${blob.sessionId || null}, ${blob.modality}, ${blob.content})
+      ON CONFLICT (blob_id) DO NOTHING`;
+  }
+
+  public async loadContextBlob(blobId: string): Promise<string | null> {
+    const rows = await this.sql<{ content: string }[]>`SELECT content FROM lyra_context_blobs WHERE blob_id = ${blobId} LIMIT 1`;
+    return rows[0]?.content ?? null;
   }
 
   public async getSessionEvents(sessionId: string, after = 0, limit = 10_000): Promise<UnifiedEvent[]> {

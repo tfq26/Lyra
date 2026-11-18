@@ -346,8 +346,22 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
 ];
 
 const THROTTLE_COOLDOWN_MS = 60_000;
+const accessDeniedModels = new Set<string>();
 
 export class ModelDecisionEngine {
+  public static markAccessDenied(modelId: string): void {
+    if (!modelId) return;
+    accessDeniedModels.add(modelId);
+    accessDeniedModels.add(modelId.replace(/^us\./, ''));
+  }
+
+  public static isAccessDenied(modelId: string): boolean {
+    return accessDeniedModels.has(modelId) || accessDeniedModels.has(modelId.replace(/^us\./, ''));
+  }
+
+  public static clearAccessDenied(): void {
+    accessDeniedModels.clear();
+  }
   /**
    * Look up a ModelProfile by exact ID or Cross-Region Inference Profile alias.
    */
@@ -416,10 +430,17 @@ export class ModelDecisionEngine {
       tags.push('algorithmic');
     }
 
-    // Micro task keywords (can be downscaled to cheaper fast-TTFT models)
+    // Micro / trivial task keywords (can be downscaled to cheaper fast-TTFT models)
     if (/\b(typo|fix typo|rename|comment|docstring|format|lint|prettier|changelog|markdown)\b/i.test(text) && !tags.includes('deep-reasoning')) {
       complexity = Math.min(complexity, 50);
       tags.push('micro-edit');
+    } else if (
+      text.trim().length > 0 &&
+      text.trim().length <= 80 &&
+      !/\b(implement|build|create|refactor|fix|debug|migrate|architecture|database|schema|test|deploy|audit|algorithm|concurrency|race|error|exception)\b/i.test(text)
+    ) {
+      complexity = Math.min(complexity, 42);
+      tags.push('trivial');
     } else if (/\b(unit test|test suite|assert|coverage)\b/i.test(text) && !tags.includes('deep-reasoning')) {
       complexity = Math.min(complexity, 75);
       tags.push('testing');
@@ -525,7 +546,7 @@ export class ModelDecisionEngine {
 
     const requiresToolStreaming = req.role === 'planner' || req.role === 'worker' || req.role === 'coder';
     for (const model of catalog) {
-      if (excluded.has(model.id)) continue;
+      if (excluded.has(model.id) || this.isAccessDenied(model.id)) continue;
       if (requiresToolStreaming && model.supportsToolStreaming === false) continue;
 
       const live = cloudWatchTelemetry.getModelLiveHealth(model.id);
