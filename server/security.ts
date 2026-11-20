@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -92,4 +93,109 @@ export function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSecrets);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, /key|token|secret|password/i.test(k) ? '[REDACTED]' : redactSecrets(v)]));
   return value;
+}
+
+export interface ExecutionSandboxPolicy {
+  version: '1.0';
+  runtime: 'mxc';
+  filesystem: {
+    readOnly: string[];
+    readWrite: string[];
+    deny: string[];
+  };
+  network: {
+    mode: 'deny' | 'allowlist' | 'unrestricted';
+    allowedHosts: string[];
+  };
+  ui: {
+    allowDisplay: boolean;
+    allowClipboard: boolean;
+  };
+}
+
+/**
+ * Generates an MXC-compatible OS sandboxing policy for autonomous agent runners,
+ * locking writes to the active workspace/worktree and denying host credential dirs.
+ */
+export function buildExecutionSandboxPolicy(
+  workspaceRoot: string,
+  options?: {
+    allowNetwork?: boolean;
+    allowedHosts?: string[];
+    extraReadOnlyPaths?: string[];
+  }
+): ExecutionSandboxPolicy {
+  const resolvedWorkspace = path.resolve(workspaceRoot);
+  const home = process.env.HOME || os.homedir();
+  const denyPaths = Array.from(SECRET_DIR_SEGMENTS).map((seg) => path.join(home, seg));
+  const allowedHosts = options?.allowedHosts ?? [];
+
+  return {
+    version: '1.0',
+    runtime: 'mxc',
+    filesystem: {
+      readOnly: ['/usr', '/bin', '/lib', '/etc', ...(options?.extraReadOnlyPaths || [])],
+      readWrite: [resolvedWorkspace, os.tmpdir()],
+      deny: denyPaths,
+    },
+    network: {
+      mode: options?.allowNetwork
+        ? allowedHosts.length > 0
+          ? 'allowlist'
+          : 'unrestricted'
+        : 'deny',
+      allowedHosts,
+    },
+    ui: {
+      allowDisplay: false,
+      allowClipboard: false,
+    },
+  };
+}
+
+let cachedMxcAvailable: boolean | null = null;
+export function isMxcBinaryAvailable(): boolean {
+  if (cachedMxcAvailable !== null) return cachedMxcAvailable;
+  const res = spawnSync('which', ['mxc'], { stdio: 'ignore' });
+  cachedMxcAvailable = res.status === 0;
+  return cachedMxcAvailable;
+}
+
+/**
+ * Wraps a command + args with `mxc run --policy <file> --` when sandboxed execution
+ * is requested and the `mxc` binary is available on PATH. Falls back cleanly to the
+ * raw command when `mxc` is not installed or executionMode is not `sandboxed`.
+ */
+export function wrapCommandWithMxcSandbox(
+  bin: string,
+  args: string[],
+  workspaceRoot: string,
+  options?: { executionMode?: string; allowNetwork?: boolean; allowedHosts?: string[] }
+): { bin: string; args: string[]; policyFile?: string; cleanup: () => void } {
+  const shouldSandbox =
+    options?.executionMode === 'sandboxed' || process.env.LYRA_MXC_SANDBOX === 'true';
+  if (!shouldSandbox || !isMxcBinaryAvailable()) {
+    return { bin, args, cleanup: () => {} };
+  }
+
+  const policy = buildExecutionSandboxPolicy(workspaceRoot, {
+    allowNetwork: options?.allowNetwork ?? true,
+    allowedHosts: options?.allowedHosts,
+  });
+  const policyFile = path.join(
+    os.tmpdir(),
+    `lyra-mxc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
+  );
+  fs.writeFileSync(policyFile, JSON.stringify(policy, null, 2), 'utf8');
+
+  return {
+    bin: 'mxc',
+    args: ['run', '--policy', policyFile, '--', bin, ...args],
+    policyFile,
+    cleanup: () => {
+      try {
+        fs.unlinkSync(policyFile);
+      } catch {}
+    },
+  };
 }

@@ -35,7 +35,9 @@ export async function saveProviderCredential(profileId: string, credential: Prov
 export async function loadProviderCredential(profile: ModelProviderProfile): Promise<ProviderCredential> {
   const managedSecret = profile.provider === 'openrouter'
     ? process.env.LYRA_MANAGED_OPENROUTER_SECRET_ARN
-    : process.env.LYRA_MANAGED_BEDROCK_SECRET_ARN;
+    : profile.provider === 'foundry'
+      ? process.env.LYRA_MANAGED_FOUNDRY_SECRET_ARN
+      : process.env.LYRA_MANAGED_BEDROCK_SECRET_ARN;
   const secretId = profile.credentialMode === 'managed' ? managedSecret : profile.secretRef;
   if (secretId) {
     if (!secretsClient) throw new Error('Secrets Manager credentials are only available in hosted Lyra.');
@@ -47,6 +49,11 @@ export async function loadProviderCredential(profile: ModelProviderProfile): Pro
   if (profile.provider === 'openrouter') {
     const apiKey = profile.credentialMode === 'managed' ? process.env.LYRA_MANAGED_OPENROUTER_API_KEY : process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error(profile.credentialMode === 'managed' ? 'Lyra-managed OpenRouter credentials are not configured.' : 'Set OPENROUTER_API_KEY or save an OpenRouter credential in hosted Lyra.');
+    return { apiKey };
+  }
+  if (profile.provider === 'foundry') {
+    const apiKey = profile.credentialMode === 'managed' ? process.env.LYRA_MANAGED_FOUNDRY_API_KEY : process.env.AZURE_FOUNDRY_API_KEY;
+    if (!apiKey) throw new Error(profile.credentialMode === 'managed' ? 'Lyra-managed Microsoft Foundry credentials are not configured.' : 'Set AZURE_FOUNDRY_API_KEY or save a Foundry credential in hosted Lyra.');
     return { apiKey };
   }
   return {};

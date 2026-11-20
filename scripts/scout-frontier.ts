@@ -25,8 +25,11 @@ async function main() {
     console.log(`    Verification: ${f.verificationCommand}\n`);
   }
 
-  console.log('⚡ To dispatch Lyra to implement any feature autonomously:');
-  console.log(`   ${report.featuresDiscovered[0].dispatchPrompt}\n`);
+  const firstFeature = report.featuresDiscovered[0];
+  if (firstFeature) {
+    console.log('⚡ To dispatch Lyra to implement any feature autonomously:');
+    console.log(`   ${firstFeature.dispatchPrompt}\n`);
+  }
 }
 
 main().catch((err) => {

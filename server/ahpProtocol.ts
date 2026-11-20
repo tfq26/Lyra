@@ -16,6 +16,7 @@ import {
 import type { LyraHarnessGateway } from './gateway';
 import {
   triageExecutionLane,
+  triageExecutionLaneWithDecisionModel,
   type IntentTriageDecision,
   type LaneModePreference,
 } from './intentTriage';
@@ -34,7 +35,7 @@ export interface AHPSession {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
-  status: 'idle' | 'running' | 'completed' | 'error';
+  status: 'idle' | 'running' | 'awaiting_input' | 'completed' | 'error';
 }
 
 export interface AHPMessage {
@@ -347,7 +348,7 @@ export class AHPServer extends EventEmitter {
       content: req.prompt,
     });
 
-    const triage = triageExecutionLane({
+    const triage = await triageExecutionLaneWithDecisionModel({
       prompt: req.prompt,
       modePreference: req.modePreference,
       activeFilePath: req.activeFilePath,

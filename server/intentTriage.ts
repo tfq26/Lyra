@@ -7,7 +7,14 @@
  * - `full-swarm` (Lane 2): Multi-file parallel DAG orchestration across isolated Git worktrees + verification gates.
  */
 
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import type { ExecutionLane } from './cloudwatchEmf';
+import {
+  buildFoundryOpenAiBaseUrl,
+  getFoundryConfig,
+  resolveProviderRoutes,
+  type ResolvedProviderRoute,
+} from './unifiedModelCatalog';
 
 export type LaneModePreference = 'auto' | ExecutionLane;
 
@@ -139,4 +146,127 @@ export function triageExecutionLane(input: IntentTriageInput): IntentTriageDecis
     detectedFiles,
     rationale: `Targeted ${estFiles}-file code change; routed to Lane 1 (Fast Patch) for direct diff streaming & 1-click apply.`,
   };
+}
+
+const DECISION_MODEL_CANDIDATES = [
+  'gpt-4o',
+  'phi-4-reasoning',
+  'mai-code-1-1-flash',
+  'nova-2-lite',
+  'gemini-4-hydrogen',
+];
+
+function selectDecisionModelRoute(): ResolvedProviderRoute | null {
+  for (const modelId of DECISION_MODEL_CANDIDATES) {
+    const routes = resolveProviderRoutes(modelId, { requireConfigured: true });
+    const healthy = routes.find((r) => !r.inCooldown);
+    if (healthy) return healthy;
+  }
+  return null;
+}
+
+/**
+ * Two-stage Ignite 2026 Decision-Model Pre-Flight:
+ * Runs sub-millisecond heuristic triage first; for borderline prompts (< 0.90 confidence),
+ * delegates lane classification to the fastest configured decision model across
+ * Foundry (microsoft-decision-1.1), Bedrock (nova-2-lite), or OpenRouter (gemini-4-hydrogen),
+ * with a tight timeout and safe heuristic fallback.
+ */
+export async function triageExecutionLaneWithDecisionModel(
+  input: IntentTriageInput,
+  options?: { timeoutMs?: number }
+): Promise<IntentTriageDecision & { decisionModelUsed?: string; decisionProvider?: string }> {
+  const heuristic = triageExecutionLane(input);
+  if (heuristic.overridden || heuristic.confidence >= 0.9) {
+    return heuristic;
+  }
+
+  const route = selectDecisionModelRoute();
+  if (!route) {
+    return heuristic;
+  }
+
+  const systemPrompt =
+    'Classify the coding request into JSON {"lane":"ask"|"fast-patch"|"full-swarm","estimatedFileCount":number,"rationale":string}.';
+  const userPrompt = input.prompt.slice(0, 1500);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options?.timeoutMs ?? 1500);
+
+  try {
+    let raw: string | undefined;
+
+    if (route.provider === 'bedrock') {
+      const client = new BedrockRuntimeClient({
+        region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1',
+      });
+      const resp = await client.send(
+        new ConverseCommand({
+          modelId: route.upstreamModelId,
+          system: [{ text: systemPrompt }],
+          messages: [{ role: 'user', content: [{ text: userPrompt }] }],
+          inferenceConfig: { maxTokens: 120, temperature: 0 },
+        }),
+        { abortSignal: controller.signal }
+      );
+      raw = resp.output?.message?.content?.find((b) => 'text' in b && b.text)?.text;
+    } else {
+      let baseUrl = 'https://openrouter.ai/api/v1';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (route.provider === 'foundry') {
+        const foundryCfg = getFoundryConfig();
+        if (!foundryCfg.endpoint || !foundryCfg.apiKey) return heuristic;
+        baseUrl = buildFoundryOpenAiBaseUrl(foundryCfg.endpoint);
+        headers['api-key'] = foundryCfg.apiKey;
+        headers.Authorization = `Bearer ${foundryCfg.apiKey}`;
+      } else {
+        const apiKey = process.env.OPENROUTER_API_KEY || process.env.LYRA_MANAGED_OPENROUTER_API_KEY;
+        if (!apiKey) return heuristic;
+        headers.Authorization = `Bearer ${apiKey}`;
+      }
+
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: route.upstreamModelId,
+          temperature: 0,
+          max_tokens: 120,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) return heuristic;
+      const data = (await res.json()) as any;
+      raw = data?.choices?.[0]?.message?.content;
+    }
+
+    if (!raw) return heuristic;
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw) as {
+      lane?: string;
+      estimatedFileCount?: number;
+      rationale?: string;
+    };
+    if (parsed.lane !== 'ask' && parsed.lane !== 'fast-patch' && parsed.lane !== 'full-swarm') {
+      return heuristic;
+    }
+    return {
+      lane: parsed.lane,
+      overridden: false,
+      confidence: 0.92,
+      estimatedFileCount: Math.max(1, Number(parsed.estimatedFileCount) || heuristic.estimatedFileCount),
+      detectedFiles: heuristic.detectedFiles,
+      rationale: parsed.rationale || `Classified by ${route.canonicalModelId} (${route.provider}) pre-flight.`,
+      decisionModelUsed: route.canonicalModelId,
+      decisionProvider: route.provider,
+    };
+  } catch {
+    return heuristic;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

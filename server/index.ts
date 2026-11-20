@@ -32,6 +32,12 @@ import { AgentRunApi } from './agentRunApi';
 import { modelCouncil } from './modelCouncil';
 import { triggerEngine } from './nightShift/triggerEngine';
 import { nightShiftRunner } from './nightShift/nightShiftRunner';
+import { autopilotOrchestrator, type AutopilotStreamEvent } from './autopilotOrchestrator';
+import {
+  a2aTaskManager,
+  buildLyraA2AAgentCard,
+  type A2ASpecialistRole,
+} from './a2aProtocol';
 import { connectPresenceManager } from './connectPresence';
 import { cloudTunnelManager } from './cloudTunnel';
 import { killAllActiveProcesses } from './nativeTools';
@@ -1260,6 +1266,167 @@ const server = http.createServer(async (req, res) => {
     const result = await catalog.getActiveModels();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
+    return;
+  }
+
+  // A2A Agent Card & Specialist Subagent Delegation
+  if (url.pathname === '/.well-known/agent.json' && req.method === 'GET') {
+    const host = req.headers.host || '127.0.0.1:3001';
+    const proto = req.headers['x-forwarded-proto'] || 'http';
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(buildLyraA2AAgentCard(`${proto}://${host}`)));
+    return;
+  }
+
+  if (url.pathname === '/api/a2a/tasks' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ tasks: a2aTaskManager.listTasks() }));
+    return;
+  }
+
+  if (url.pathname === '/api/a2a/tasks' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const task = await a2aTaskManager.delegateTask({
+          role: String(payload.role || 'research') as A2ASpecialistRole,
+          objective: String(payload.objective || ''),
+          contextSnippet: typeof payload.contextSnippet === 'string' ? payload.contextSnippet : undefined,
+        });
+        res.writeHead(task.status === 'failed' ? 500 : 200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ task }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Failed to delegate A2A task.' }));
+      }
+    });
+    return;
+  }
+
+  const a2aTaskMatch = url.pathname.match(/^\/api\/a2a\/tasks\/([^/]+)$/);
+  if (a2aTaskMatch && req.method === 'GET') {
+    const task = a2aTaskManager.getTask(decodeURIComponent(a2aTaskMatch[1]!));
+    res.writeHead(task ? 200 : 404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(task ? { task } : { error: 'A2A task not found.' }));
+    return;
+  }
+
+  // Forgejo Bi-Directional Webhooks (/lyra bot & lyra:autopilot label)
+  if (url.pathname === '/api/webhooks/forgejo' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      const signature =
+        (req.headers['x-forgejo-signature'] as string | undefined) ||
+        (req.headers['x-gitea-signature'] as string | undefined) ||
+        (req.headers['x-hub-signature-256'] as string | undefined);
+      const webhookHandler = new GitHubWebhookHandler(harnessGateway, {
+        secret: process.env.FORGEJO_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET,
+      });
+      if (!webhookHandler.verifySignature(body, signature)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid Forgejo webhook signature' }));
+        return;
+      }
+      try {
+        const payload = JSON.parse(body);
+        const result = await webhookHandler.handleWebhook(payload, {
+          forge: 'forgejo',
+          forgeBaseUrl: process.env.FORGEJO_BASE_URL,
+          githubToken: process.env.FORGEJO_TOKEN || process.env.GITEA_TOKEN,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Autopilot Plan -> GitHub/Forgejo Issue creation & optional immediate dispatch
+  if (url.pathname === '/api/autopilot/issues' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const result = await autopilotOrchestrator.publishPlanAsIssue({
+          markdown: String(payload.markdown || ''),
+          workspacePath: String(payload.workspacePath || process.cwd()),
+          forgeTarget: payload.forgeTarget,
+          autoStart: Boolean(payload.autoStart),
+        });
+        res.writeHead(result.issue.success ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Failed to publish issue.' }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/autopilot/runs' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ runs: autopilotOrchestrator.listRuns() }));
+    return;
+  }
+
+  const autopilotStreamMatch = url.pathname.match(/^\/api\/autopilot\/runs\/([^/]+)\/stream$/);
+  if (autopilotStreamMatch && req.method === 'GET') {
+    const runId = decodeURIComponent(autopilotStreamMatch[1]!);
+    const run = autopilotOrchestrator.getRun(runId);
+    if (!run) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Autopilot run not found.' }));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    });
+    res.write(`data: ${JSON.stringify({ type: 'SNAPSHOT', runId, record: run })}\n\n`);
+    const onEvent = (evt: AutopilotStreamEvent) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+    };
+    autopilotOrchestrator.on(`run:${runId}`, onEvent);
+    req.on('close', () => {
+      autopilotOrchestrator.off(`run:${runId}`, onEvent);
+    });
+    return;
+  }
+
+  const autopilotRespondMatch = url.pathname.match(/^\/api\/autopilot\/runs\/([^/]+)\/respond$/);
+  if (autopilotRespondMatch && req.method === 'POST') {
+    const runId = decodeURIComponent(autopilotRespondMatch[1]!);
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const action = payload.action as 'proceed' | 'expand-scope' | 'retry' | 'abort';
+        if (!['proceed', 'expand-scope', 'retry', 'abort'].includes(action)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'action must be proceed, expand-scope, retry, or abort.' }));
+          return;
+        }
+        const updated = await autopilotOrchestrator.respondToRun(runId, {
+          action,
+          message: typeof payload.message === 'string' ? payload.message : undefined,
+          author: typeof payload.author === 'string' ? payload.author : 'gram-user',
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, run: updated }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err?.message || 'Failed to respond to Autopilot run.' }));
+      }
+    });
     return;
   }
 

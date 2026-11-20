@@ -15,6 +15,8 @@ describe('Lyra Product Scout & Competitive Intelligence Engine', () => {
     expect(fs.existsSync(report.outputDir)).toBe(true);
 
     const first = report.featuresDiscovered[0];
+    expect(first).toBeDefined();
+    if (!first) return;
     const expectedFile = path.join(
       report.outputDir,
       `${first.id}-${first.featureName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.md`

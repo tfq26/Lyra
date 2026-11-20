@@ -19,7 +19,17 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import { BEDROCK_CATALOG, ModelDecisionEngine, type ModelProfile } from './modelDecisionEngine';
 import { sharedContextOptimizer } from './contextOptimizer';
+import { cloudWatchTelemetry } from './cloudwatchEmf';
 import { redactSecretText } from './security';
+import {
+  buildFoundryOpenAiBaseUrl,
+  getFoundryConfig,
+  listCanonicalModels,
+  markProviderRouteCooldown,
+  resolveProviderRoutes,
+  type BackendProvider,
+  type ResolvedProviderRoute,
+} from './unifiedModelCatalog';
 
 export type PrivacyMode = 'standard' | 'zdr' | 'local-only';
 
@@ -43,7 +53,7 @@ export interface GatewayLlmStreamRequest {
   model: string;
   sessionId?: string;
   mode?: 'chat' | 'plan' | 'code';
-  provider?: 'bedrock' | 'openrouter' | 'openai-compat';
+  provider?: 'bedrock' | 'foundry' | 'openrouter' | 'openai-compat';
   privacyMode?: PrivacyMode;
   effort?: 'low' | 'medium' | 'high';
   supportsPromptCaching?: boolean;
@@ -74,7 +84,7 @@ export function isLocalEndpointUrl(rawUrl?: string): boolean {
 
 export function enforcePrivacyPolicy(params: {
   privacyMode: PrivacyMode;
-  provider: 'bedrock' | 'openrouter' | 'openai-compat';
+  provider: 'bedrock' | 'foundry' | 'openrouter' | 'openai-compat';
   modelId: string;
   baseUrl?: string;
   contributorWarning?: string;
@@ -224,19 +234,40 @@ function sendSse(res: ServerResponse, payload: Record<string, unknown>): void {
 }
 
 export function listGatewayLlmModels(privacyMode: PrivacyMode = 'standard') {
-  const models = BEDROCK_CATALOG.map((m) => ({
-    id: m.inferenceProfileId || m.id,
-    name: m.name,
-    provider: 'bedrock' as const,
-    contextWindow: m.metrics.contextWindowTokens,
-    supportsPromptCaching: m.supportsPromptCaching,
-    zdrCompliant: true,
-  }));
-
   if (privacyMode === 'local-only') {
     return { privacyMode, models: [] };
   }
+
+  const models = listCanonicalModels({ privacyMode }).map((m) => ({
+    id: m.id,
+    name: m.name,
+    family: m.family,
+    tier: m.tier,
+    contextWindow: m.metrics.contextWindowTokens,
+    supportsPromptCaching: m.routes.some((r) => r.supportsPromptCaching),
+    zdrCompliant: m.routes.some((r) => !r.contributorWarning),
+    providers: m.routes.map((r) => r.provider),
+  }));
+
   return { privacyMode, models };
+}
+
+function isCapacityOrTransientError(err: any, httpStatus?: number): { retryable: boolean; isCapacity: boolean } {
+  const errName = String(err?.name || '');
+  const errMsg = String(err?.message || '');
+  const status = httpStatus ?? err?.$metadata?.httpStatusCode ?? err?.status;
+  const isAccessDenied =
+    errName === 'AccessDeniedException' ||
+    status === 403 ||
+    status === 404 ||
+    /not available for this account|not authorized|model.*not found|end of life|model identifier is invalid|invalid model|DeploymentNotFound|deployment for this resource does not exist/i.test(errMsg);
+  const isThrottle =
+    errName === 'ThrottlingException' ||
+    status === 429 ||
+    status === 503 ||
+    status === 529 ||
+    /too many requests|throttl|rate.?limit|capacity|overloaded|service unavailable/i.test(errMsg);
+  return { retryable: isAccessDenied || isThrottle, isCapacity: isThrottle || isAccessDenied };
 }
 
 export async function handleGatewayLlmStream(
@@ -246,26 +277,30 @@ export async function handleGatewayLlmStream(
 ): Promise<void> {
   const privacyMode: PrivacyMode = body.privacyMode || (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
   const byok = body.byokConfig;
-  const resolvedProvider: 'bedrock' | 'openrouter' | 'openai-compat' =
+  const initialProvider: 'bedrock' | 'foundry' | 'openrouter' | 'openai-compat' =
     byok?.provider === 'ollama' || body.provider === 'openai-compat'
       ? 'openai-compat'
-      : body.provider === 'openrouter' || byok?.provider === 'openrouter' || body.model.includes('/')
-        ? 'openrouter'
-        : 'bedrock';
+      : byok?.provider === 'foundry' || body.provider === 'foundry'
+        ? 'foundry'
+        : body.provider === 'openrouter' || byok?.provider === 'openrouter' || body.model.includes('/')
+          ? 'openrouter'
+          : 'bedrock';
 
-  const baseUrl =
+  const initialBaseUrl =
     byok?.baseUrl ||
-    (resolvedProvider === 'openai-compat'
+    (initialProvider === 'openai-compat'
       ? process.env.LYRA_OPENAI_COMPAT_BASE_URL || 'http://127.0.0.1:11434/v1'
-      : resolvedProvider === 'openrouter'
-        ? 'https://openrouter.ai/api/v1'
-        : undefined);
+      : initialProvider === 'foundry'
+        ? getFoundryConfig().endpoint
+        : initialProvider === 'openrouter'
+          ? 'https://openrouter.ai/api/v1'
+          : undefined);
 
   enforcePrivacyPolicy({
     privacyMode,
-    provider: resolvedProvider,
+    provider: initialProvider,
     modelId: byok?.modelId || body.model,
-    baseUrl,
+    baseUrl: initialBaseUrl,
   });
 
   res.writeHead(200, {
@@ -277,6 +312,7 @@ export async function handleGatewayLlmStream(
   const startedAt = Date.now();
   let abortReason: string | undefined;
   let activeModelId = body.model;
+  let activeProvider: 'bedrock' | 'foundry' | 'openrouter' | 'openai-compat' = initialProvider;
   const abortController = new AbortController();
   req.on('aborted', () => {
     abortReason = 'client_request_aborted';
@@ -301,84 +337,209 @@ export async function handleGatewayLlmStream(
     });
     const optimizedMessages = optimized.messages;
 
-    if (resolvedProvider === 'bedrock') {
-      const client = getBedrockClient();
-      const extractLastUserPrompt = (): string => {
-        const msgs = body.messages || [];
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (!m || m.role !== 'user') continue;
-          if (typeof m.content === 'string' && m.content.trim()) return m.content.trim();
-          if (Array.isArray(m.content)) {
-            const textPart = m.content.find((b) => b.type === 'text' && b.text?.trim());
-            if (textPart && textPart.type === 'text') return textPart.text.trim();
-          }
+    const extractLastUserPrompt = (): string => {
+      const msgs = body.messages || [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (!m || m.role !== 'user') continue;
+        if (typeof m.content === 'string' && m.content.trim()) return m.content.trim();
+        if (Array.isArray(m.content)) {
+          const textPart = m.content.find((b) => b.type === 'text' && b.text?.trim());
+          if (textPart && textPart.type === 'text') return textPart.text.trim();
         }
-        return 'General coding question';
-      };
+      }
+      return 'General coding question';
+    };
 
-      const isAuto = body.model === 'auto';
-      let candidates: ModelProfile[] = [];
-      if (isAuto) {
-        const decision = ModelDecisionEngine.decideOptimalModel({
+    const isAuto = body.model === 'auto';
+
+    // Build ordered execution routes across Bedrock, Foundry, and OpenRouter
+    interface ExecutionAttempt {
+      provider: 'bedrock' | 'foundry' | 'openrouter' | 'openai-compat';
+      upstreamModelId: string;
+      canonicalModelId?: string;
+      supportsPromptCaching: boolean;
+      baseUrl?: string;
+      apiKey?: string;
+    }
+
+    const buildConfiguredAutoCatalog = (): ModelProfile[] => {
+      const configured: ModelProfile[] = [];
+      for (const cm of listCanonicalModels()) {
+        const routes = resolveProviderRoutes(cm.id, {
+          privacyMode,
+          requireConfigured: true,
+        });
+        const healthyRoutes = routes.filter(
+          (r) => !r.inCooldown && !ModelDecisionEngine.isAccessDenied(r.upstreamModelId)
+        );
+        if (healthyRoutes.length === 0) continue;
+        const primaryRoute = healthyRoutes[0]!;
+        configured.push({
+          id: cm.id,
+          name: cm.name,
+          provider: primaryRoute.provider,
+          tier: cm.tier as 1 | 2 | 3 | 4,
+          inferenceProfileId: primaryRoute.upstreamModelId,
+          supportsPromptCaching: primaryRoute.supportsPromptCaching,
+          supportsToolStreaming: true,
+          pricing: primaryRoute.pricing,
+          metrics: cm.metrics,
+          strengths: cm.strengths,
+        });
+      }
+      return configured.length > 0 ? configured : BEDROCK_CATALOG;
+    };
+
+    const attempts: ExecutionAttempt[] = [];
+    const seenAttemptKeys = new Set<string>();
+    const pushAttempt = (attempt: ExecutionAttempt) => {
+      const key = `${attempt.provider}:${attempt.upstreamModelId}`;
+      if (seenAttemptKeys.has(key)) return;
+      seenAttemptKeys.add(key);
+      attempts.push(attempt);
+    };
+
+    if (byok || initialProvider === 'openai-compat') {
+      pushAttempt({
+        provider: initialProvider,
+        upstreamModelId: byok?.modelId || body.model,
+        supportsPromptCaching: Boolean(body.supportsPromptCaching),
+        baseUrl: initialBaseUrl,
+        apiKey: byok?.apiKey?.trim(),
+      });
+    } else if (isAuto) {
+      const autoCatalog = buildConfiguredAutoCatalog();
+      const decision = ModelDecisionEngine.decideOptimalModel(
+        {
           prompt: extractLastUserPrompt(),
           lane: body.mode === 'chat' ? 'ask' : 'fast-patch',
           role: body.mode === 'plan' ? 'planner' : 'coder',
           policyProfile:
             body.effort === 'high' ? 'frontier' : body.effort === 'low' ? 'frugal' : 'balanced',
+        },
+        autoCatalog
+      );
+      const autoModels: ModelProfile[] = [decision.selectedModel, ...decision.failoverChain];
+      for (const m of autoModels) {
+        const routes = resolveProviderRoutes(m.id, {
+          privacyMode,
+          requireConfigured: true,
         });
-        candidates = [decision.selectedModel, ...decision.failoverChain];
-      } else {
-        const catalogEntry = ModelDecisionEngine.findModelProfile(body.model);
-        if (catalogEntry) {
-          candidates = [catalogEntry];
+        if (routes.length > 0) {
+          for (const r of routes) {
+            if (ModelDecisionEngine.isAccessDenied(r.upstreamModelId)) continue;
+            pushAttempt({
+              provider: r.provider,
+              upstreamModelId: r.upstreamModelId,
+              canonicalModelId: r.canonicalModelId,
+              supportsPromptCaching: body.supportsPromptCaching ?? r.supportsPromptCaching,
+            });
+          }
+        } else {
+          pushAttempt({
+            provider: 'bedrock',
+            upstreamModelId: m.inferenceProfileId || m.id,
+            supportsPromptCaching: body.supportsPromptCaching ?? Boolean(m.supportsPromptCaching),
+          });
         }
       }
 
-      const candidateIds =
-        candidates.length > 0
-          ? candidates.map((m) => m.inferenceProfileId || m.id)
-          : [body.model];
-
-      let lastErr: any = null;
-      for (let cIdx = 0; cIdx < candidateIds.length; cIdx++) {
-        const candidateId = candidateIds[cIdx]!;
-        activeModelId = candidateId;
-        const catalogEntry = candidates[cIdx] || ModelDecisionEngine.findModelProfile(candidateId);
-        const supportsCaching = body.supportsPromptCaching ?? catalogEntry?.supportsPromptCaching ?? true;
-        const isAnthropic = candidateId.includes('anthropic') || candidateId.includes('claude');
-        const supportsSystemCache = supportsCaching && (isAnthropic || candidateId.includes('amazon.nova'));
-        const supportsToolsCache = supportsCaching && isAnthropic;
-        const cleanSystem = redactSecretText(body.systemPrompt || '');
-        const systemBlocks: SystemContentBlock[] = cleanSystem ? [{ text: cleanSystem }] : [];
-        if (supportsSystemCache && cleanSystem.length >= 1024) {
-          systemBlocks.push({ cachePoint: { type: 'default' } } as SystemContentBlock);
-        }
-        if (optimized.workingSetBlock) {
-          systemBlocks.push({ text: optimized.workingSetBlock });
-        }
-
-        const command = new ConverseStreamCommand({
-          modelId: candidateId,
-          system: systemBlocks.length > 0 ? systemBlocks : undefined,
-          messages: toBedrockMessages(optimizedMessages, tools.length > 0),
-          toolConfig:
-            tools.length > 0
-              ? { tools: toBedrockTools(tools, supportsToolsCache && tools.length >= 2) }
-              : undefined,
-          inferenceConfig: { maxTokens, temperature: 0.2 },
+      // Guaranteed cross-provider fallback tail (verified Foundry deployments + broadly enabled Bedrock/OpenRouter models)
+      const guaranteedFallbacks = [
+        'gpt-4o',
+        'mai-thinking-1',
+        'phi-4-reasoning',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5',
+        'nova-2-lite',
+      ];
+      for (const fallbackId of guaranteedFallbacks) {
+        if (attempts.length >= 8) break;
+        const routes = resolveProviderRoutes(fallbackId, {
+          privacyMode,
+          requireConfigured: true,
         });
+        for (const r of routes) {
+          if (r.inCooldown || ModelDecisionEngine.isAccessDenied(r.upstreamModelId)) continue;
+          pushAttempt({
+            provider: r.provider,
+            upstreamModelId: r.upstreamModelId,
+            canonicalModelId: r.canonicalModelId,
+            supportsPromptCaching: body.supportsPromptCaching ?? r.supportsPromptCaching,
+          });
+        }
+      }
+    } else {
+      const canonicalRoutes: ResolvedProviderRoute[] = resolveProviderRoutes(body.model, {
+        privacyMode,
+        preferredProvider:
+          initialProvider === 'foundry' || initialProvider === 'openrouter'
+            ? initialProvider
+            : undefined,
+        requireConfigured: true,
+      });
+      if (canonicalRoutes.length > 0) {
+        for (const r of canonicalRoutes) {
+          pushAttempt({
+            provider: r.provider,
+            upstreamModelId: r.upstreamModelId,
+            canonicalModelId: r.canonicalModelId,
+            supportsPromptCaching: body.supportsPromptCaching ?? r.supportsPromptCaching,
+          });
+        }
+      } else {
+        pushAttempt({
+          provider: initialProvider,
+          upstreamModelId: body.model,
+          supportsPromptCaching: Boolean(body.supportsPromptCaching),
+          baseUrl: initialBaseUrl,
+        });
+      }
+    }
 
-        let text = '';
-        let thinking = '';
-        let stopReason = 'end_turn';
-        let usage:
-          | { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
-          | undefined;
-        const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-        const activeTools = new Map<number, { id: string; name: string; rawInput: string }>();
+    let lastErr: any = null;
+    for (let aIdx = 0; aIdx < attempts.length; aIdx++) {
+      const attempt = attempts[aIdx]!;
+      activeProvider = attempt.provider;
+      activeModelId = attempt.upstreamModelId;
+      let streamedAnyDelta = false;
 
-        try {
+      try {
+        if (attempt.provider === 'bedrock') {
+          const client = getBedrockClient();
+          const isAnthropic = activeModelId.includes('anthropic') || activeModelId.includes('claude');
+          const supportsSystemCache = attempt.supportsPromptCaching && (isAnthropic || activeModelId.includes('amazon.nova'));
+          const supportsToolsCache = attempt.supportsPromptCaching && isAnthropic;
+          const cleanSystem = redactSecretText(body.systemPrompt || '');
+          const systemBlocks: SystemContentBlock[] = cleanSystem ? [{ text: cleanSystem }] : [];
+          if (supportsSystemCache && cleanSystem.length >= 1024) {
+            systemBlocks.push({ cachePoint: { type: 'default' } } as SystemContentBlock);
+          }
+          if (optimized.workingSetBlock) {
+            systemBlocks.push({ text: optimized.workingSetBlock });
+          }
+
+          const command = new ConverseStreamCommand({
+            modelId: activeModelId,
+            system: systemBlocks.length > 0 ? systemBlocks : undefined,
+            messages: toBedrockMessages(optimizedMessages, tools.length > 0),
+            toolConfig:
+              tools.length > 0
+                ? { tools: toBedrockTools(tools, supportsToolsCache && tools.length >= 2) }
+                : undefined,
+            inferenceConfig: { maxTokens, temperature: 0.2 },
+          });
+
+          let text = '';
+          let thinking = '';
+          let stopReason = 'end_turn';
+          let usage:
+            | { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+            | undefined;
+          const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+          const activeTools = new Map<number, { id: string; name: string; rawInput: string }>();
+
           const response = await client.send(command, { abortSignal: abortController.signal });
           if (response.stream) {
             for await (const event of response.stream) {
@@ -393,9 +554,11 @@ export async function handleGatewayLlmStream(
                 const delta = event.contentBlockDelta.delta as any;
                 const idx = event.contentBlockDelta.contentBlockIndex ?? 0;
                 if (typeof delta.text === 'string' && delta.text) {
+                  streamedAnyDelta = true;
                   text += delta.text;
                   sendSse(res, { type: 'text_delta', delta: delta.text });
                 } else if (delta.reasoningContent?.text) {
+                  streamedAnyDelta = true;
                   thinking += delta.reasoningContent.text;
                   sendSse(res, { type: 'thinking_delta', delta: delta.reasoningContent.text });
                 } else if (delta.toolUse?.input) {
@@ -426,6 +589,27 @@ export async function handleGatewayLlmStream(
             }
           }
 
+          cloudWatchTelemetry.recordTurn({
+            turnId: `gw-${startedAt}-${aIdx}`,
+            sessionId: body.sessionId || 'gateway',
+            lane: body.mode === 'chat' ? 'ask' : 'fast-patch',
+            policyProfile: body.effort === 'high' ? 'frontier' : body.effort === 'low' ? 'frugal' : 'balanced',
+            modelId: activeModelId,
+            modelName: attempt.canonicalModelId || activeModelId,
+            provider: 'bedrock',
+            ttftMs: Date.now() - startedAt,
+            durationMs: Date.now() - startedAt,
+            inputTokens: usage?.inputTokens ?? 0,
+            outputTokens: usage?.outputTokens ?? 0,
+            cacheReadTokens: usage?.cacheReadTokens ?? 0,
+            cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
+            estimatedCostUsd: 0,
+            failoverCount: aIdx,
+            escalatedTier: false,
+            throttled: false,
+            succeeded: true,
+          });
+
           sendSse(res, {
             type: 'done',
             result: {
@@ -435,163 +619,211 @@ export async function handleGatewayLlmStream(
               stopReason,
               usage,
               resolvedModelId: activeModelId,
+              resolvedProvider: 'bedrock',
               contextOptimization: optimized.stats,
             },
           });
           res.end();
           return;
-        } catch (err: any) {
-          lastErr = err;
-          const errName = String(err?.name || '');
-          const errMsg = String(err?.message || '');
-          const status = err?.$metadata?.httpStatusCode;
-          const isAccessDenied =
-            errName === 'AccessDeniedException' ||
-            status === 403 ||
-            /not available for this account|not authorized|model.*not found|end of life/i.test(errMsg);
-          const isThrottle =
-            errName === 'ThrottlingException' ||
-            status === 429 ||
-            /too many requests|throttl/i.test(errMsg);
-          if (isAccessDenied) {
-            ModelDecisionEngine.markAccessDenied(candidateId);
-          }
-          const canRetry =
-            isAuto &&
-            !abortController.signal.aborted &&
-            !text &&
-            !thinking &&
-            cIdx < candidateIds.length - 1 &&
-            (isAccessDenied || isThrottle);
-          if (canRetry) {
-            continue;
-          }
-          throw err;
         }
+
+        // Foundry / OpenRouter / OpenAI-compat / Ollama SSE proxy
+        let cleanBaseUrl = (attempt.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+        let apiKey = attempt.apiKey;
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Title': 'Lyra Gateway',
+        };
+
+        if (attempt.provider === 'foundry') {
+          const foundryCfg = getFoundryConfig({ endpoint: attempt.baseUrl, apiKey });
+          if (!foundryCfg.endpoint || !foundryCfg.apiKey) {
+            throw new Error('AZURE_FOUNDRY_ENDPOINT and AZURE_FOUNDRY_API_KEY are required for Foundry.');
+          }
+          cleanBaseUrl = buildFoundryOpenAiBaseUrl(foundryCfg.endpoint);
+          apiKey = foundryCfg.apiKey;
+          headers['api-key'] = apiKey;
+          headers.Authorization = `Bearer ${apiKey}`;
+        } else if (attempt.provider === 'openrouter') {
+          cleanBaseUrl = 'https://openrouter.ai/api/v1';
+          apiKey = apiKey || process.env.OPENROUTER_API_KEY || process.env.LYRA_MANAGED_OPENROUTER_API_KEY;
+          if (!apiKey) {
+            throw new Error('OPENROUTER_API_KEY is missing on Lyra gateway.');
+          }
+          headers.Authorization = `Bearer ${apiKey}`;
+        } else if (apiKey) {
+          headers.Authorization = `Bearer ${apiKey}`;
+        }
+
+        const useAnthropicCache = Boolean(
+          attempt.supportsPromptCaching && (activeModelId.includes('anthropic') || activeModelId.includes('claude'))
+        );
+
+        const effectiveSystem = [body.systemPrompt || '', optimized.workingSetBlock].filter(Boolean).join('\n\n');
+        const requestBody: Record<string, unknown> = {
+          model: activeModelId,
+          messages: toOpenAiMessages(effectiveSystem, optimizedMessages, useAnthropicCache),
+          tools: tools.length > 0
+            ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }))
+            : undefined,
+          stream: true,
+          max_tokens: maxTokens,
+          temperature: 0.2,
+        };
+
+        if (attempt.provider === 'openrouter' && privacyMode === 'zdr') {
+          requestBody.provider = { data_collection: 'deny', zdr: true };
+        }
+
+        const upstream = await fetch(`${cleanBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: abortController.signal,
+        });
+
+        if (!upstream.ok || !upstream.body) {
+          const errText = await upstream.text().catch(() => '');
+          const httpErr: any = new Error(`Upstream provider error (${upstream.status}): ${errText.slice(0, 300)}`);
+          httpErr.status = upstream.status;
+          throw httpErr;
+        }
+
+        const reader = upstream.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let text = '';
+        let thinking = '';
+        let stopReason = 'stop';
+        let usage: { inputTokens: number; outputTokens: number } | undefined;
+        const toolMap = new Map<number, { id: string; name: string; rawArgs: string }>();
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(payload);
+              const choice = parsed.choices?.[0];
+              const delta = choice?.delta;
+              if (delta?.reasoning_content) {
+                streamedAnyDelta = true;
+                thinking += delta.reasoning_content;
+                sendSse(res, { type: 'thinking_delta', delta: delta.reasoning_content });
+              }
+              if (typeof delta?.content === 'string' && delta.content) {
+                streamedAnyDelta = true;
+                text += delta.content;
+                sendSse(res, { type: 'text_delta', delta: delta.content });
+              }
+              if (Array.isArray(delta?.tool_calls)) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0;
+                  const entry = toolMap.get(idx) ?? {
+                    id: tc.id || `tool_${idx}`,
+                    name: tc.function?.name || '',
+                    rawArgs: '',
+                  };
+                  if (tc.id) entry.id = tc.id;
+                  if (tc.function?.name) entry.name = tc.function.name;
+                  if (tc.function?.arguments) entry.rawArgs += tc.function.arguments;
+                  toolMap.set(idx, entry);
+                }
+              }
+              if (choice?.finish_reason) stopReason = choice.finish_reason;
+              if (parsed.usage) {
+                usage = {
+                  inputTokens: parsed.usage.prompt_tokens ?? 0,
+                  outputTokens: parsed.usage.completion_tokens ?? 0,
+                };
+              }
+            } catch {}
+          }
+        }
+
+        const toolCalls = Array.from(toolMap.values()).map((entry) => {
+          let input: Record<string, unknown> = {};
+          try { input = entry.rawArgs ? JSON.parse(entry.rawArgs) : {}; } catch {}
+          return { id: entry.id, name: entry.name, input };
+        });
+
+        cloudWatchTelemetry.recordTurn({
+          turnId: `gw-${startedAt}-${aIdx}`,
+          sessionId: body.sessionId || 'gateway',
+          lane: body.mode === 'chat' ? 'ask' : 'fast-patch',
+          policyProfile: body.effort === 'high' ? 'frontier' : body.effort === 'low' ? 'frugal' : 'balanced',
+          modelId: activeModelId,
+          modelName: attempt.canonicalModelId || activeModelId,
+          provider: attempt.provider,
+          ttftMs: Date.now() - startedAt,
+          durationMs: Date.now() - startedAt,
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          estimatedCostUsd: 0,
+          failoverCount: aIdx,
+          escalatedTier: false,
+          throttled: false,
+          succeeded: true,
+        });
+
+        sendSse(res, {
+          type: 'done',
+          result: {
+            text,
+            thinking,
+            toolCalls,
+            stopReason,
+            usage,
+            resolvedModelId: activeModelId,
+            resolvedProvider: attempt.provider,
+          },
+        });
+        res.end();
+        return;
+      } catch (err: any) {
+        lastErr = err;
+        const { retryable, isCapacity } = isCapacityOrTransientError(err);
+        if (isCapacity && attempt.canonicalModelId && (attempt.provider === 'bedrock' || attempt.provider === 'foundry' || attempt.provider === 'openrouter')) {
+          markProviderRouteCooldown(attempt.canonicalModelId, attempt.provider as BackendProvider);
+        }
+        if (
+          attempt.provider === 'bedrock' &&
+          (String(err?.name || '') === 'AccessDeniedException' ||
+            /model identifier is invalid|not available for this account|model.*not found/i.test(String(err?.message || '')))
+        ) {
+          ModelDecisionEngine.markAccessDenied(activeModelId);
+          if (attempt.canonicalModelId) {
+            ModelDecisionEngine.markAccessDenied(attempt.canonicalModelId);
+          }
+        }
+        const canRetry =
+          !abortController.signal.aborted &&
+          !streamedAnyDelta &&
+          aIdx < attempts.length - 1 &&
+          retryable;
+        if (canRetry) {
+          continue;
+        }
+        throw err;
       }
-      if (lastErr) throw lastErr;
     }
-
-    // OpenRouter / OpenAI-compat / Ollama SSE proxy
-    const cleanBaseUrl = (baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
-    const apiKey =
-      byok?.apiKey?.trim() ||
-      (resolvedProvider === 'openrouter' ? process.env.OPENROUTER_API_KEY : undefined);
-    if (!apiKey && resolvedProvider !== 'openai-compat') {
-      throw new Error('OPENROUTER_API_KEY is missing on Lyra gateway.');
-    }
-
-    const upstreamModelId = byok?.modelId || body.model;
-    const useAnthropicCache = Boolean(
-      body.supportsPromptCaching && (upstreamModelId.includes('anthropic') || upstreamModelId.includes('claude'))
-    );
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Title': 'Lyra Gateway',
-    };
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-
-    const effectiveSystem = [body.systemPrompt || '', optimized.workingSetBlock].filter(Boolean).join('\n\n');
-    const requestBody: Record<string, unknown> = {
-      model: upstreamModelId,
-      messages: toOpenAiMessages(effectiveSystem, optimizedMessages, useAnthropicCache),
-      tools: tools.length > 0
-        ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }))
-        : undefined,
-      stream: true,
-      max_tokens: maxTokens,
-      temperature: 0.2,
-    };
-
-    if (resolvedProvider === 'openrouter' && privacyMode === 'zdr') {
-      requestBody.provider = { data_collection: 'deny', zdr: true };
-    }
-
-    const upstream = await fetch(`${cleanBaseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: abortController.signal,
-    });
-
-    if (!upstream.ok || !upstream.body) {
-      const errText = await upstream.text().catch(() => '');
-      throw new Error(`Upstream provider error (${upstream.status}): ${errText.slice(0, 300)}`);
-    }
-
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let text = '';
-    let thinking = '';
-    let stopReason = 'stop';
-    let usage: { inputTokens: number; outputTokens: number } | undefined;
-    const toolMap = new Map<number, { id: string; name: string; rawArgs: string }>();
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(payload);
-          const choice = parsed.choices?.[0];
-          const delta = choice?.delta;
-          if (delta?.reasoning_content) {
-            thinking += delta.reasoning_content;
-            sendSse(res, { type: 'thinking_delta', delta: delta.reasoning_content });
-          }
-          if (typeof delta?.content === 'string' && delta.content) {
-            text += delta.content;
-            sendSse(res, { type: 'text_delta', delta: delta.content });
-          }
-          if (Array.isArray(delta?.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
-              const entry = toolMap.get(idx) ?? {
-                id: tc.id || `tool_${idx}`,
-                name: tc.function?.name || '',
-                rawArgs: '',
-              };
-              if (tc.id) entry.id = tc.id;
-              if (tc.function?.name) entry.name = tc.function.name;
-              if (tc.function?.arguments) entry.rawArgs += tc.function.arguments;
-              toolMap.set(idx, entry);
-            }
-          }
-          if (choice?.finish_reason) stopReason = choice.finish_reason;
-          if (parsed.usage) {
-            usage = {
-              inputTokens: parsed.usage.prompt_tokens ?? 0,
-              outputTokens: parsed.usage.completion_tokens ?? 0,
-            };
-          }
-        } catch {}
-      }
-    }
-
-    const toolCalls = Array.from(toolMap.values()).map((entry) => {
-      let input: Record<string, unknown> = {};
-      try { input = entry.rawArgs ? JSON.parse(entry.rawArgs) : {}; } catch {}
-      return { id: entry.id, name: entry.name, input };
-    });
-
-    sendSse(res, { type: 'done', result: { text, thinking, toolCalls, stopReason, usage } });
-    res.end();
+    if (lastErr) throw lastErr;
   } catch (err: any) {
     sendSse(res, {
       type: 'error',
       message: err?.message || 'Gateway LLM stream failed.',
       diagnostics: {
         source: 'lyra-gateway',
-        provider: resolvedProvider,
+        provider: activeProvider,
         model: activeModelId,
         requestedModel: body.model,
         privacyMode,
@@ -602,7 +834,7 @@ export async function handleGatewayLlmStream(
           (abortController.signal.reason !== undefined ? String(abortController.signal.reason) : undefined),
         errorName: err?.name,
         errorCode: err?.code,
-        httpStatusCode: err?.$metadata?.httpStatusCode,
+        httpStatusCode: err?.$metadata?.httpStatusCode ?? err?.status,
         awsRequestId: err?.$metadata?.requestId,
         elapsedMs: Date.now() - startedAt,
       },

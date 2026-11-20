@@ -6,6 +6,7 @@ import path from 'path';
 import type { AgentType, ExecutionMode } from './types';
 import { EventEmitter } from 'events';
 import { StrandsHarness } from './strandsHarness';
+import { wrapCommandWithMxcSandbox } from './security';
 
 export interface RunAgentOptions {
   agentType: AgentType;
@@ -408,15 +409,19 @@ export class ProcessManager extends EventEmitter {
 
     return new Promise<RunAgentResult>((resolve) => {
       let isSettled = false;
+      const sandboxed = wrapCommandWithMxcSandbox(bin, args, cwd, {
+        executionMode: options.executionMode,
+      });
       const finish = (result: RunAgentResult) => {
         if (isSettled) return;
         isSettled = true;
+        sandboxed.cleanup();
         this.activeProcesses.delete(processId);
         resolve(result);
       };
 
       try {
-        const child = spawn(bin, args, {
+        const child = spawn(sandboxed.bin, sandboxed.args, {
           cwd,
           env: this.getExtendedEnv(),
         });
@@ -641,15 +646,19 @@ export class ProcessManager extends EventEmitter {
 
     return new Promise<RunAgentResult>((resolve) => {
       let isSettled = false;
+      const sandboxed = wrapCommandWithMxcSandbox(bin, args, cwd, {
+        executionMode: options.executionMode,
+      });
       const finish = (result: RunAgentResult) => {
         if (isSettled) return;
         isSettled = true;
+        sandboxed.cleanup();
         this.activeProcesses.delete(processId);
         resolve(result);
       };
 
       try {
-        const child = spawn(bin, args, {
+        const child = spawn(sandboxed.bin, sandboxed.args, {
           cwd,
           env: this.getExtendedEnv(),
         });
@@ -813,15 +822,19 @@ export class ProcessManager extends EventEmitter {
 
     return new Promise<RunAgentResult>((resolve) => {
       let isSettled = false;
+      const sandboxed = wrapCommandWithMxcSandbox(bin, args, cwd, {
+        executionMode: options.executionMode,
+      });
       const finish = (result: RunAgentResult) => {
         if (isSettled) return;
         isSettled = true;
+        sandboxed.cleanup();
         this.activeProcesses.delete(processId);
         resolve(result);
       };
 
       try {
-        const child = spawn(bin, args, {
+        const child = spawn(sandboxed.bin, sandboxed.args, {
           cwd,
           env: this.getExtendedEnv(),
         });

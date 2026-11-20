@@ -1,10 +1,15 @@
-import crypto from 'node:crypto';
 import type { LyraHarnessGateway } from './gateway';
+import { autopilotOrchestrator } from './autopilotOrchestrator';
+import { verifyForgeWebhookSignature, type ForgeType } from './issueForgeAdapter';
 
 export interface WebhookEventPayload {
   action: string;
+  label?: { name: string };
   issue?: {
     number: number;
+    title?: string;
+    body?: string;
+    html_url?: string;
     pull_request?: Record<string, unknown>;
   };
   pull_request?: {
@@ -28,7 +33,15 @@ export interface WebhookEventPayload {
 
 export interface WebhookHandleResult {
   handled: boolean;
-  action?: 'dispatched_fix' | 'reviewed' | 'maintained' | 'reported_status' | 'ignored';
+  action?:
+    | 'dispatched_fix'
+    | 'autopilot_started'
+    | 'autopilot_resumed'
+    | 'autopilot_aborted'
+    | 'reviewed'
+    | 'maintained'
+    | 'reported_status'
+    | 'ignored';
   command?: string;
   issueNumber?: number;
   message?: string;
@@ -43,31 +56,56 @@ export class GitHubWebhookHandler {
   }
 
   /**
-   * Verify HMAC SHA256 signature from GitHub
+   * Verify HMAC SHA256 signature from GitHub or Forgejo
    */
-  public verifySignature(payloadRaw: string, signatureHeader?: string): boolean {
-    if (!this.secret) return true; // Signature check skipped if no secret configured
-    if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return false;
-
-    const signature = signatureHeader.slice(7);
-    const expected = crypto.createHmac('sha256', this.secret).update(payloadRaw).digest('hex');
-
-    try {
-      return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
-    } catch {
-      return false;
-    }
+  public verifySignature(payloadRaw: string, signatureHeader?: string, secretOverride?: string): boolean {
+    return verifyForgeWebhookSignature(payloadRaw, signatureHeader, secretOverride ?? this.secret);
   }
 
   /**
-   * Process an incoming GitHub webhook payload
+   * Process an incoming GitHub or Forgejo webhook payload
    */
   public async handleWebhook(
     payload: WebhookEventPayload,
-    options?: { workspacePath?: string; githubToken?: string }
+    options?: { workspacePath?: string; githubToken?: string; forge?: ForgeType; forgeBaseUrl?: string }
   ): Promise<WebhookHandleResult> {
-    const commentBody = payload.comment?.body?.trim();
+    const forge: ForgeType = options?.forge || 'github';
+    const repoOwner = payload.repository.owner.login;
+    const repoName = payload.repository.name;
+    const workspacePath = options?.workspacePath || process.cwd();
     const issueNumber = payload.pull_request?.number || payload.issue?.number;
+
+    // 1. Issue labeled with `lyra:autopilot` -> start Autopilot run
+    if (
+      payload.action === 'labeled' &&
+      payload.label?.name?.toLowerCase() === 'lyra:autopilot' &&
+      payload.issue?.number
+    ) {
+      const run = await autopilotOrchestrator.startRun({
+        forgeTarget: {
+          forge,
+          owner: repoOwner,
+          repo: repoName,
+          baseUrl: options?.forgeBaseUrl,
+          token: options?.githubToken,
+        },
+        issueNumber: payload.issue.number,
+        issueUrl: payload.issue.html_url,
+        title: payload.issue.title || `Issue #${payload.issue.number}`,
+        planMarkdown: payload.issue.body || payload.issue.title || `Issue #${payload.issue.number}`,
+        workspacePath,
+      });
+      return {
+        handled: true,
+        action: 'autopilot_started',
+        command: 'label:lyra:autopilot',
+        issueNumber: payload.issue.number,
+        runId: run.runId,
+        message: `Autopilot started on ${forge} ${repoOwner}/${repoName}#${payload.issue.number} (${run.runId}).`,
+      };
+    }
+
+    const commentBody = payload.comment?.body?.trim();
 
     if (!commentBody || !commentBody.startsWith('/lyra')) {
       return { handled: false, action: 'ignored', message: 'No /lyra command detected' };
@@ -81,12 +119,63 @@ export class GitHubWebhookHandler {
     const subCommand = commandMatch[1]!.toLowerCase();
     const commandArgs = (commandMatch[2] || '').trim();
 
-    const repoOwner = payload.repository.owner.login;
-    const repoName = payload.repository.name;
-    const branchName = payload.pull_request?.head.ref || 'main';
-    const workspacePath = options?.workspacePath || process.cwd();
-
     switch (subCommand) {
+      case 'run': {
+        if (!issueNumber) {
+          return { handled: false, action: 'ignored', message: 'Missing issue number for /lyra run.' };
+        }
+        const run = await autopilotOrchestrator.startRun({
+          forgeTarget: {
+            forge,
+            owner: repoOwner,
+            repo: repoName,
+            baseUrl: options?.forgeBaseUrl,
+            token: options?.githubToken,
+          },
+          issueNumber,
+          issueUrl: payload.issue?.html_url,
+          title: payload.issue?.title || `Issue #${issueNumber}`,
+          planMarkdown: commandArgs || payload.issue?.body || `Issue #${issueNumber}`,
+          workspacePath,
+        });
+        return {
+          handled: true,
+          action: 'autopilot_started',
+          command: subCommand,
+          issueNumber,
+          runId: run.runId,
+          message: `Autopilot started for #${issueNumber} (${run.runId}).`,
+        };
+      }
+
+      case 'proceed':
+      case 'expand-scope':
+      case 'retry':
+      case 'abort': {
+        if (!issueNumber) {
+          return { handled: false, action: 'ignored', message: `Missing issue number for /lyra ${subCommand}.` };
+        }
+        const existing = autopilotOrchestrator.getRunByIssue(
+          { forge, owner: repoOwner, repo: repoName },
+          issueNumber
+        );
+        if (!existing) {
+          return { handled: false, action: 'ignored', message: `No active Autopilot run found for #${issueNumber}.` };
+        }
+        const updated = await autopilotOrchestrator.respondToRun(existing.runId, {
+          action: subCommand,
+          message: commandArgs || undefined,
+          author: payload.comment?.user.login || 'user',
+        });
+        return {
+          handled: true,
+          action: subCommand === 'abort' ? 'autopilot_aborted' : 'autopilot_resumed',
+          command: subCommand,
+          issueNumber,
+          runId: updated.runId,
+          message: `Autopilot run ${updated.runId} updated via /lyra ${subCommand} (phase: ${updated.phase}).`,
+        };
+      }
       case 'fix': {
         const objective = commandArgs || `Fix requested on PR #${issueNumber} by @${payload.comment?.user.login || 'user'}`;
         const dispatch = await this.gateway.dispatchTask({

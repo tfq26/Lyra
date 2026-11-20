@@ -24,6 +24,6 @@ describe('User Feedback Service (P0 Priority Queue)', () => {
 
     const list = service.listFeedback();
     expect(list.length).toBe(1);
-    expect(list[0].id).toBe(ticket.id);
+    expect(list[0]?.id).toBe(ticket.id);
   });
 });

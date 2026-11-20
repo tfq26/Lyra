@@ -125,13 +125,13 @@ bun scripts/lyra-dispatch.ts --prompt "Fix user feedback ${id}: ${payload.descri
         const descMatch = text.match(/## 1\. User Statement & Problem Description\s+>\s+"([^"]+)"/);
         const createdMatch = text.match(/- \*\*Submitted:\*\* (.*)/);
 
-        if (idMatch) {
+        if (idMatch?.[1]) {
           tickets.push({
             id: idMatch[1],
             priority: 'P0_USER_FEEDBACK',
             category: 'ui-bug',
-            description: descMatch ? descMatch[1] : '',
-            createdAt: createdMatch ? createdMatch[1].trim() : '',
+            description: descMatch?.[1] ?? '',
+            createdAt: createdMatch?.[1]?.trim() ?? '',
             status: 'pending',
             filePath: fullPath,
             autoDispatch: true,

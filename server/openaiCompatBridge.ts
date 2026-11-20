@@ -6,7 +6,7 @@
 
 import type http from 'node:http';
 import type { AHPServer } from './ahpProtocol';
-import { BEDROCK_CATALOG } from './modelDecisionEngine';
+import { listCanonicalModels } from './unifiedModelCatalog';
 import { extractProjectApiKey, type ProjectRegistry } from './projectRegistry';
 
 export interface OpenAiResponseFormat {
@@ -80,18 +80,19 @@ export class OpenAiCompatBridge {
       { id: 'lyra-nightshift', object: 'model', created: now, owned_by: 'lyra-autonomous-nightshift', name: 'Lyra Night Shift', context_window: 200_000 },
     ];
 
-    const bedrockModels = BEDROCK_CATALOG.map((m) => ({
-      id: m.inferenceProfileId || m.id,
+    const canonicalModels = listCanonicalModels().map((m) => ({
+      id: m.id,
       object: 'model',
       created: now,
-      owned_by: m.provider.toLowerCase(),
+      owned_by: m.family,
       name: `${m.name} (Lyra Cloud Synced)`,
       context_window: m.metrics.contextWindowTokens,
+      providers: m.routes.map((r) => r.provider),
     }));
 
     return {
       object: 'list',
-      data: [...virtualModels, ...bedrockModels],
+      data: [...virtualModels, ...canonicalModels],
     };
   }
 

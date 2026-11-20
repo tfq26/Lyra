@@ -193,25 +193,6 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
     strengths: ['300k token multimodal context', 'Cost-effective general coding', 'Multimodal UI inspection'],
   },
   {
-    id: 'us.amazon.nova-2-pro-v1:0',
-    name: 'Amazon Nova 2 Pro',
-    provider: 'Amazon',
-    tier: 3,
-    inferenceProfileId: 'us.amazon.nova-2-pro-v1:0',
-    supportsPromptCaching: true,
-    supportsToolStreaming: true,
-    pricing: { inputPerMillion: 0.8, outputPerMillion: 3.2 },
-    metrics: {
-      reasoningScore: 92,
-      codingScore: 94,
-      toolProficiency: 95,
-      contextWindowTokens: 300_000,
-      avgTtftMs: 480,
-      tokensPerSecond: 90,
-    },
-    strengths: ['Next-gen Nova 2 multimodal reasoning', 'Agentic multi-step planning', 'Deep code synthesis'],
-  },
-  {
     id: 'us.meta.llama4-maverick-17b-instruct-v1:0',
     name: 'Llama 4 Maverick 17B Instruct',
     provider: 'Meta',
@@ -546,7 +527,13 @@ export class ModelDecisionEngine {
 
     const requiresToolStreaming = req.role === 'planner' || req.role === 'worker' || req.role === 'coder';
     for (const model of catalog) {
-      if (excluded.has(model.id) || this.isAccessDenied(model.id)) continue;
+      if (
+        excluded.has(model.id) ||
+        this.isAccessDenied(model.id) ||
+        (model.inferenceProfileId && this.isAccessDenied(model.inferenceProfileId))
+      ) {
+        continue;
+      }
       if (requiresToolStreaming && model.supportsToolStreaming === false) continue;
 
       const live = cloudWatchTelemetry.getModelLiveHealth(model.id);

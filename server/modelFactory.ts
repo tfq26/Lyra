@@ -7,6 +7,8 @@ import type { Model } from '@strands-agents/sdk';
 import type { ModelProviderProfile } from './types';
 import { loadProviderCredential } from './providerSecrets';
 import { enforcePrivacyPolicy, type PrivacyMode } from './gatewayLlmProxy';
+import { buildFoundryOpenAiBaseUrl, getFoundryConfig } from './unifiedModelCatalog';
+import { ORCHESTRATION_ROUTING_POLICY } from './a2aProtocol';
 import path from 'path';
 
 export interface ModelRuntimeContext { tenantId: string; region?: string; }
@@ -29,6 +31,23 @@ export async function createStrandsModel(profile: ModelProviderProfile): Promise
       maxTokens: 8192,
       temperature: 0.2,
       clientConfig: { baseURL: 'https://openrouter.ai/api/v1' },
+    });
+  }
+  if (profile.provider === 'foundry') {
+    const foundryCfg = getFoundryConfig({ endpoint: profile.baseUrl, apiKey: secret.apiKey });
+    if (!foundryCfg.endpoint || !foundryCfg.apiKey) {
+      throw new Error('Microsoft Foundry endpoint and API key are required (set AZURE_FOUNDRY_ENDPOINT and AZURE_FOUNDRY_API_KEY).');
+    }
+    return new OpenAIModel({
+      api: 'chat',
+      modelId: profile.model,
+      apiKey: foundryCfg.apiKey,
+      maxTokens: 8192,
+      temperature: 0.2,
+      clientConfig: {
+        baseURL: buildFoundryOpenAiBaseUrl(foundryCfg.endpoint),
+        defaultHeaders: { 'api-key': foundryCfg.apiKey },
+      },
     });
   }
   if (profile.provider === 'openai-compat') {
@@ -73,7 +92,7 @@ export function getNativeAgent(profile: ModelProviderProfile, sessionId: string,
     id: `lyra-${sessionId}`,
     name: 'Lyra',
     description: 'Lyra coding agent',
-    systemPrompt: 'You are Lyra. Inspect repo code before editing. Make focused changes with tools and add concise TSDoc/invariants to exports. Verify work with tests. Never claim unverified success.',
+    systemPrompt: `You are Lyra. Inspect repo code before editing. Make focused changes with tools and add concise TSDoc/invariants to exports. Verify work with tests. Never claim unverified success.\n\n${ORCHESTRATION_ROUTING_POLICY}`,
     model,
     tools,
     interventions,

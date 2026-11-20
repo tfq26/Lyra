@@ -1,7 +1,9 @@
 import { Container, getContainer } from '@cloudflare/containers';
 
+type ContainerCtorArgs = ConstructorParameters<typeof Container<Env>>;
+
 export interface Env {
-  LYRA_CONTAINER: DurableObjectNamespace<LyraContainer>;
+  LYRA_CONTAINER: Parameters<typeof getContainer<LyraContainer>>[0];
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   BETTER_AUTH_SECRET?: string;
@@ -9,6 +11,10 @@ export interface Env {
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;
   AWS_REGION?: string;
+  AZURE_FOUNDRY_ENDPOINT?: string;
+  AZURE_FOUNDRY_API_KEY?: string;
+  AZURE_FOUNDRY_API_VERSION?: string;
+  OPENROUTER_API_KEY?: string;
   DATABASE_URL?: string;
   LYRA_DATABASE_URL?: string;
   LYRA_DATABASE_HOST?: string;
@@ -20,11 +26,11 @@ export interface Env {
 }
 
 export class LyraContainer extends Container<Env> {
-  defaultPort = 3001;
-  sleepAfter = '30m';
-  enableInternet = true;
+  override defaultPort = 3001;
+  override sleepAfter = '30m';
+  override enableInternet = true;
 
-  constructor(ctx: DurableObjectState, env: Env) {
+  constructor(ctx: ContainerCtorArgs[0], env: Env) {
     super(ctx, env);
     this.envVars = {
       LYRA_HOSTED: 'true',
@@ -37,6 +43,10 @@ export class LyraContainer extends Container<Env> {
       ...(env.AWS_ACCESS_KEY_ID ? { AWS_ACCESS_KEY_ID: env.AWS_ACCESS_KEY_ID } : {}),
       ...(env.AWS_SECRET_ACCESS_KEY ? { AWS_SECRET_ACCESS_KEY: env.AWS_SECRET_ACCESS_KEY } : {}),
       ...(env.AWS_REGION ? { AWS_REGION: env.AWS_REGION } : {}),
+      ...(env.AZURE_FOUNDRY_ENDPOINT ? { AZURE_FOUNDRY_ENDPOINT: env.AZURE_FOUNDRY_ENDPOINT } : {}),
+      ...(env.AZURE_FOUNDRY_API_KEY ? { AZURE_FOUNDRY_API_KEY: env.AZURE_FOUNDRY_API_KEY } : {}),
+      ...(env.AZURE_FOUNDRY_API_VERSION ? { AZURE_FOUNDRY_API_VERSION: env.AZURE_FOUNDRY_API_VERSION } : {}),
+      ...(env.OPENROUTER_API_KEY ? { OPENROUTER_API_KEY: env.OPENROUTER_API_KEY } : {}),
       ...(env.DATABASE_URL ? { DATABASE_URL: env.DATABASE_URL } : {}),
       ...(env.LYRA_DATABASE_URL ? { LYRA_DATABASE_URL: env.LYRA_DATABASE_URL } : {}),
       ...(env.LYRA_DATABASE_HOST ? { LYRA_DATABASE_HOST: env.LYRA_DATABASE_HOST } : {}),

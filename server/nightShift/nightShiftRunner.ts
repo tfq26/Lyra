@@ -9,6 +9,25 @@ import { type CiFailureEvent } from './triggerEngine';
 import { VisualCapture } from '../visualCapture';
 import { VisualCritic, type VisualCritiqueReport } from '../visualCritic';
 import { cloudTunnelManager } from '../cloudTunnel';
+import {
+  enforceImmutableVerificationHarness,
+  evaluateBlastRadius,
+  verifyDifferentialRedGreen,
+  type ProofContractReport,
+} from './proofContract';
+
+export interface NightShiftBudgetPolicy {
+  maxDurationMs?: number;
+  maxPatchFiles?: number;
+  allowedActions?: string[];
+}
+
+export interface NightShiftAuditEntry {
+  timestamp: string;
+  phase: string;
+  action: string;
+  detail: string;
+}
 
 export interface NightShiftRunReport {
   runId: string;
@@ -30,6 +49,14 @@ export interface NightShiftRunReport {
   visualCritique?: VisualCritiqueReport;
   publicPreviewUrl?: string;
   proofMarkdown: string;
+  auditLog?: NightShiftAuditEntry[];
+  budgetEnforced?: {
+    maxDurationMs: number;
+    maxPatchFiles: number;
+    exceededDuration: boolean;
+    exceededPatchFiles: boolean;
+  };
+  proofContract?: ProofContractReport;
 }
 
 export class NightShiftRunner {
@@ -42,9 +69,17 @@ export class NightShiftRunner {
     testCommand?: string;
     testArgs?: string[];
     applyToWorkspace?: boolean;
+    budgetPolicy?: NightShiftBudgetPolicy;
   }): Promise<NightShiftRunReport> {
     const startedAt = Date.now();
     const runId = `nightshift-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const maxDurationMs = params.budgetPolicy?.maxDurationMs ?? 15 * 60 * 1000;
+    const maxPatchFiles = params.budgetPolicy?.maxPatchFiles ?? 10;
+    const auditLog: NightShiftAuditEntry[] = [];
+    const recordAudit = (phase: string, action: string, detail: string) => {
+      auditLog.push({ timestamp: new Date().toISOString(), phase, action, detail });
+    };
+    recordAudit('init', 'budget_policy', `maxDurationMs=${maxDurationMs}, maxPatchFiles=${maxPatchFiles}`);
     const workspace = params.workspacePath || process.cwd();
     const testCmd = params.testCommand || 'bun';
     const baseArgs = params.testArgs || ['test'];
@@ -75,6 +110,7 @@ export class NightShiftRunner {
     let patchEdits: Array<{ file: string; unifiedDiff: string }> = [];
     let visualCritique: VisualCritiqueReport | undefined;
     let publicPreviewUrl: string | undefined;
+    const tamperedFilesRestored: string[] = [];
     let verifyReceipt: SandboxExecutionReceipt = {
       sessionId: runId,
       phase: 'verification_green',
@@ -209,6 +245,13 @@ Instructions:
           }
         }
 
+        // Enforce immutable verification harness before running GREEN check
+        const restored = enforceImmutableVerificationHarness(worktreePath, reproResult.testFilePath);
+        if (restored.length > 0) {
+          tamperedFilesRestored.push(...restored);
+          recordAudit('verify', 'immutable_harness_restored', `Restored protected files: ${restored.join(', ')}`);
+        }
+
         // Re-run test suite or build to verify GREEN
         verifyReceipt = await sandboxRunner.runCommand(
           worktreePath,
@@ -280,7 +323,41 @@ Instructions:
     }
 
     const durationMs = Date.now() - startedAt;
-    const passedVerification = verifyReceipt.passed;
+    const exceededDuration = durationMs > maxDurationMs;
+    const exceededPatchFiles = patchEdits.length > maxPatchFiles;
+    const blastRadius = evaluateBlastRadius(
+      patchEdits.map((p) => p.file),
+      [
+        ...traceMapping.relatedFiles,
+        ...traceMapping.impactedCallers.map((c) => c.filePath || ''),
+        traceMapping.parsedError.file || '',
+      ],
+      reproResult!.testFilePath
+    );
+    const differentialRedGreen = verifyDifferentialRedGreen(
+      reproReceipt!.passed,
+      verifyReceipt.passed
+    );
+    const autoPrEligible =
+      verifyReceipt.passed &&
+      !exceededDuration &&
+      !exceededPatchFiles &&
+      tamperedFilesRestored.length === 0 &&
+      blastRadius.withinBlastRadius &&
+      differentialRedGreen;
+    const proofContract: ProofContractReport = {
+      tamperedFilesRestored,
+      withinBlastRadius: blastRadius.withinBlastRadius,
+      outOfScopeFiles: blastRadius.outOfScopeFiles,
+      differentialRedGreen,
+      autoPrEligible,
+    };
+    const passedVerification = verifyReceipt.passed && !exceededDuration && !exceededPatchFiles;
+    recordAudit(
+      'verify',
+      'budget_check',
+      `durationMs=${durationMs}/${maxDurationMs}, patchFiles=${patchEdits.length}/${maxPatchFiles}, passed=${passedVerification}, autoPrEligible=${autoPrEligible}`
+    );
 
     const proofMarkdown = this.formatProofTicket({
       runId,
@@ -315,6 +392,14 @@ Instructions:
       visualCritique,
       publicPreviewUrl,
       proofMarkdown,
+      auditLog,
+      budgetEnforced: {
+        maxDurationMs,
+        maxPatchFiles,
+        exceededDuration,
+        exceededPatchFiles,
+      },
+      proofContract,
     };
   }
 

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { type StackTraceMapping } from '../repoBrain/invariantDetector';
+import { invokeCanonicalModelText } from '../unifiedModelCatalog';
 
 export interface ReproTestResult {
   testFilePath: string;
@@ -70,6 +71,31 @@ Guidelines:
 4. CRITICAL: DO NOT assert \`.toThrow()\` or \`.toThrowError()\`. DO NOT mock React or delete properties in the test. Simply call the real component/function with normal dummy props and assert it renders/executes cleanly.
 5. Emit ONLY the raw code inside a \`\`\`typescript block.`;
 
+    const userPrompt = `Write a minimal, valid test in \`${testFileName}\` for \`${fileHint}\` that calls/renders the component with standard dummy props. Do NOT wrap in \`toThrow\`; simply invoke the component so it fails naturally on the current bug and passes once fixed.`;
+
+    const canonicalCandidates = ['mai-code-2', 'gpt-6.2-sol', 'claude-fable-5-2', 'nova-2-pro', 'deepseek-v4-pro'];
+    for (const canonicalId of canonicalCandidates) {
+      const invoked = await invokeCanonicalModelText({
+        modelId: canonicalId,
+        systemPrompt,
+        userPrompt,
+        maxTokens: 800,
+        temperature: 0.1,
+      });
+      if (invoked?.text) {
+        const codeMatch = invoked.text.match(/```(?:typescript|ts)?\n([\s\S]*?)```/);
+        const testCode = codeMatch ? codeMatch[1]!.trim() : invoked.text.trim();
+        if (testCode.length > 20) {
+          return {
+            testFilePath,
+            testCode,
+            rationale: `Generated reproduction test capturing "${errorMsg}" to establish RED baseline.`,
+            generatedByModel: `${invoked.canonicalModelId} (${invoked.provider})`,
+          };
+        }
+      }
+    }
+
     const candidates = [
       'us.meta.llama4-maverick-17b-instruct-v1:0',
       'us.moonshotai.kimi-k3',
@@ -82,7 +108,7 @@ Guidelines:
           new ConverseCommand({
             modelId,
             system: [{ text: systemPrompt }],
-            messages: [{ role: 'user', content: [{ text: `Write a minimal, valid test in \`${testFileName}\` for \`${fileHint}\` that calls/renders the component with standard dummy props. Do NOT wrap in \`toThrow\`; simply invoke the component so it fails naturally on the current bug and passes once fixed.` }] }],
+            messages: [{ role: 'user', content: [{ text: userPrompt }] }],
             inferenceConfig: { maxTokens: 800, temperature: 0.1 },
           })
         );

@@ -22,6 +22,12 @@ import { createNativeTools, inferNativeToolGroupsFromPrompt } from './nativeTool
 import { resolveOptimalModel } from './modelRouter';
 import { loadProviderCredential } from './providerSecrets';
 import { CloudMonitor } from './cloudMonitor';
+import {
+  buildFoundryOpenAiBaseUrl,
+  getFoundryConfig,
+  resolveProviderRoutes,
+  type ResolvedProviderRoute,
+} from './unifiedModelCatalog';
 import type { ModelProviderProfile } from './types';
 import type { RunAgentResult } from './processManager';
 import type { UnifiedStore } from './unifiedStore';
@@ -50,12 +56,105 @@ export class StrandsHarness extends EventEmitter {
     return StrandsHarness.instance;
   }
 
+  private buildStrandsModelFromRoute(route: ResolvedProviderRoute, defaultRegion: string) {
+    if (route.provider === 'foundry') {
+      const foundryCfg = getFoundryConfig();
+      if (!foundryCfg.endpoint || !foundryCfg.apiKey) {
+        throw new Error(`Microsoft Foundry credentials are missing for '${route.canonicalModelId}'.`);
+      }
+      return new OpenAIModel({
+        api: 'chat',
+        modelId: route.upstreamModelId,
+        apiKey: foundryCfg.apiKey,
+        maxTokens: 8192,
+        temperature: 0.2,
+        clientConfig: {
+          baseURL: buildFoundryOpenAiBaseUrl(foundryCfg.endpoint),
+          defaultHeaders: { 'api-key': foundryCfg.apiKey },
+        },
+      });
+    }
+
+    if (route.provider === 'openrouter') {
+      const apiKey = process.env.OPENROUTER_API_KEY || process.env.LYRA_MANAGED_OPENROUTER_API_KEY;
+      if (!apiKey) {
+        throw new Error(`OpenRouter API key is missing for '${route.canonicalModelId}'.`);
+      }
+      return new OpenAIModel({
+        api: 'chat',
+        modelId: route.upstreamModelId,
+        apiKey,
+        maxTokens: 8192,
+        temperature: 0.2,
+        clientConfig: { baseURL: 'https://openrouter.ai/api/v1' },
+      });
+    }
+
+    return new BedrockModel({
+      modelId: route.upstreamModelId,
+      region: defaultRegion,
+      maxTokens: 8192,
+      temperature: 0.2,
+      cacheConfig: { strategy: 'auto' },
+    });
+  }
+
   /**
-   * Builds the Strands model instance with automatic multi-model failover.
+   * Builds the Strands model instance with automatic multi-provider & multi-model failover.
    */
   private async createModelRouter(profile?: ModelProviderProfile, customModelId?: string) {
     const defaultRegion = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
     const targetModelId = customModelId || 'us.amazon.nova-pro-v1:0';
+
+    if (profile?.provider === 'foundry') {
+      const secret = await loadProviderCredential(profile).catch(() => ({} as any));
+      const foundryCfg = getFoundryConfig({ endpoint: profile.baseUrl, apiKey: secret.apiKey });
+      if (!foundryCfg.endpoint || !foundryCfg.apiKey) {
+        throw new Error(`Microsoft Foundry endpoint/key missing for '${targetModelId}'.`);
+      }
+      return new OpenAIModel({
+        api: 'chat',
+        modelId: targetModelId,
+        apiKey: foundryCfg.apiKey,
+        maxTokens: 8192,
+        temperature: 0.2,
+        clientConfig: {
+          baseURL: buildFoundryOpenAiBaseUrl(foundryCfg.endpoint),
+          defaultHeaders: { 'api-key': foundryCfg.apiKey },
+        },
+      });
+    }
+
+    const canonicalRoutes = resolveProviderRoutes(targetModelId, { requireConfigured: true });
+    if (canonicalRoutes.length > 0) {
+      const candidates: RoutingCandidate[] = canonicalRoutes.map(
+        (route, idx) =>
+          new RoutingCandidate({
+            model: this.buildStrandsModelFromRoute(route, defaultRegion),
+            name: `${idx === 0 ? 'primary' : 'provider-failover'}:${route.provider}:${route.upstreamModelId}`,
+          })
+      );
+
+      if (targetModelId !== 'nova-2-pro' && targetModelId !== 'us.amazon.nova-pro-v1:0') {
+        candidates.push(
+          new RoutingCandidate({
+            model: new BedrockModel({
+              modelId: 'us.amazon.nova-pro-v1:0',
+              region: defaultRegion,
+              maxTokens: 8192,
+              temperature: 0.2,
+              cacheConfig: { strategy: 'auto' },
+            }),
+            name: 'fallback:nova-pro',
+          })
+        );
+      }
+
+      return new ModelRouter(candidates, {
+        strategy: new FallbackStrategy(),
+        maxSwitches: Math.max(3, candidates.length),
+      });
+    }
 
     const isOpenRouter = profile?.provider === 'openrouter' ||
       targetModelId.includes('/') ||

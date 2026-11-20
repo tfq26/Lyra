@@ -77,7 +77,7 @@ export interface HarnessProfile {
 export interface ModelProviderProfile {
   id: string;
   name: string;
-  provider: 'bedrock' | 'openrouter' | 'openai-compat';
+  provider: 'bedrock' | 'foundry' | 'openrouter' | 'openai-compat';
   credentialMode?: 'byo' | 'managed';
   enabled?: boolean;
   region?: string;

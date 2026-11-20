@@ -18,12 +18,19 @@ import {
   type ModelProfile,
 } from './modelDecisionEngine';
 import { blockedDirectories, isSecretName, resolveWorkspacePath } from './nativeTools';
+import { invokeCanonicalModelText } from './unifiedModelCatalog';
 
 export type CouncilMode =
   | 'rag-synthesis'
   | 'architecture-debate'
   | 'security-triangulation'
   | 'heisenbug-rca';
+
+export interface CouncilSeatGrounding {
+  verifiedPaths: string[];
+  unverifiedPaths: string[];
+  groundingScore: number;
+}
 
 export interface CouncilSeatAnalysis {
   seatId: 'docs-finops-rag' | 'codebase-specialist' | 'invariant-critic';
@@ -37,6 +44,83 @@ export interface CouncilSeatAnalysis {
   hypothesisOrProposal: string;
   riskOrEdgeCase: string;
   durationMs: number;
+  grounding?: CouncilSeatGrounding;
+}
+
+const CITATION_FILE_RE =
+  /(?:^|[\s`'("])([A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|py|go|rs|java|json|yaml|yml|md))(?:$|[\s`'"):,.;!?])/g;
+
+/**
+ * Verifies every file path cited by a council seat against disk in `workspacePath`
+ * so hallucinated paths are flagged before Chair synthesis and Strands memory writes.
+ */
+export function groundSeatCitations(
+  seat: CouncilSeatAnalysis,
+  workspacePath: string
+): CouncilSeatAnalysis {
+  const candidates = new Set<string>(seat.inspectedFiles || []);
+  const textBlob = [
+    ...(seat.keyFindings || []),
+    seat.hypothesisOrProposal || '',
+    seat.riskOrEdgeCase || '',
+  ].join('\n');
+
+  for (const match of textBlob.matchAll(CITATION_FILE_RE)) {
+    const candidate = match[1]?.trim();
+    if (candidate && !candidate.startsWith('http') && !candidate.includes('..')) {
+      candidates.add(candidate);
+    }
+  }
+
+  const resolvedRoot = path.resolve(workspacePath);
+  const verifiedPaths: string[] = [];
+  const unverifiedPaths: string[] = [];
+
+  for (const rel of candidates) {
+    const cleanRel = rel.replace(/^\.\//, '');
+    const full = path.resolve(resolvedRoot, cleanRel);
+    if (!full.startsWith(resolvedRoot + path.sep) && full !== resolvedRoot) {
+      unverifiedPaths.push(cleanRel);
+      continue;
+    }
+    if (fs.existsSync(full)) {
+      verifiedPaths.push(cleanRel);
+    } else {
+      unverifiedPaths.push(cleanRel);
+    }
+  }
+
+  const total = verifiedPaths.length + unverifiedPaths.length;
+  const groundingScore = total === 0 ? 1 : Number((verifiedPaths.length / total).toFixed(2));
+  return {
+    ...seat,
+    grounding: { verifiedPaths, unverifiedPaths, groundingScore },
+  };
+}
+
+/**
+ * Anonymizes council seat proposals (`Proposal A`, `Proposal B`, `Proposal C`) and
+ * exposes deterministic citation-grounding tags so the Chair and peer reviewers judge
+ * substance and evidence rather than model brand names.
+ */
+export function buildAnonymizedCouncilBriefs(seats: CouncilSeatAnalysis[]): string {
+  const labels = ['Proposal A', 'Proposal B', 'Proposal C', 'Proposal D'];
+  return seats
+    .map((s, idx) => {
+      const label = labels[idx] || `Proposal ${idx + 1}`;
+      const verified = s.grounding?.verifiedPaths?.length
+        ? s.grounding.verifiedPaths.join(', ')
+        : 'none';
+      const unverified = s.grounding?.unverifiedPaths?.length
+        ? s.grounding.unverifiedPaths.join(', ')
+        : 'none';
+      return `[${label} — ${s.roleTitle}]
+- Grounding Score: ${s.grounding?.groundingScore ?? 1} | [VERIFIED]: ${verified} | [UNVERIFIED]: ${unverified}
+- Findings: ${s.keyFindings.join(' | ')}
+- Proposal: ${s.hypothesisOrProposal}
+- Risk: ${s.riskOrEdgeCase}`;
+    })
+    .join('\n\n');
 }
 
 export interface StrandsMemoryEntry {
@@ -396,10 +480,14 @@ export class ModelCouncilAnalyzer {
       }),
     ]);
 
-    const seats = [docSeat, codeSeat, criticSeat];
+    const rawSeats = [docSeat, codeSeat, criticSeat];
+    const seats = rawSeats.map((s) => groundSeatCitations(s, workspacePath));
+    const verifiedCitations = Array.from(
+      new Set(seats.flatMap((s) => s.grounding?.verifiedPaths || []))
+    );
 
     req.onProgress?.(
-      `[Council] Stage 2: Chair (${chair.name}) cross-examining seat findings and distilling consensus vs. disagreements...`
+      `[Council] Stage 2: Chair (${chair.name}) cross-examining grounded anonymized briefs and distilling consensus vs. disagreements...`
     );
 
     // Stage 2: Cross-Examination & Synthesis by dynamically selected Chair
@@ -408,7 +496,7 @@ export class ModelCouncilAnalyzer {
       mode,
       roster.chairDecision,
       seats,
-      allInspectedFiles
+      verifiedCitations.length > 0 ? verifiedCitations : allInspectedFiles
     );
 
     const totalDurationMs = Math.max(1, Date.now() - startMs);
@@ -429,7 +517,7 @@ export class ModelCouncilAnalyzer {
       consensusSummary: synthesis.consensus[0] || synthesis.recommendedSolution.slice(0, 180),
       keyDisagreement: synthesis.disagreements[0] || 'All seats aligned on primary architecture path.',
       recommendedAction: synthesis.recommendedSolution,
-      citations: allInspectedFiles,
+      citations: verifiedCitations.length > 0 ? verifiedCitations : allInspectedFiles,
     });
 
     const chairProfileId = chair.inferenceProfileId || chair.id;
@@ -514,52 +602,51 @@ export class ModelCouncilAnalyzer {
       const candidates = [selected, ...params.decision.failoverChain.slice(0, 2)];
       for (const candidate of candidates) {
         const candidateId = candidate.inferenceProfileId || candidate.id;
-        try {
-          const client = this.getBedrockClient();
-          const response = await client.send(
-            new ConverseCommand({
-              modelId: candidateId,
-              system: [
-                {
-                  text: `You are ${params.roleTitle} in Lyra's Multi-Model Engineering Council (mode: ${params.mode}).
+        const seatSystemPrompt = `You are ${params.roleTitle} in Lyra's Multi-Model Engineering Council (mode: ${params.mode}).
 Analyze the provided workspace RAG shards for the user's question.
 Respond concisely with:
 1. Key Findings (citing exact file names)
 2. Your core hypothesis or implementation proposal
-3. One subtle risk, edge case, or point of contention other models might overlook.`,
-                },
-              ],
-              messages: [
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      text: `Question: ${params.question}\n\nAssigned Evidence Shards:\n${shardContext || 'No specific files matched.'}`,
-                    },
-                  ],
-                },
-              ],
-              inferenceConfig: {
-                maxTokens: 450,
-                temperature: 0.2,
-              },
-            })
-          );
+3. One subtle risk, edge case, or point of contention other models might overlook.`;
+        const seatUserPrompt = `Question: ${params.question}\n\nAssigned Evidence Shards:\n${shardContext || 'No specific files matched.'}`;
 
-          const text =
-            response.output?.message?.content
-              ?.map((c: any) => c.text || c.reasoningContent?.reasoningText?.text || '')
-              .join('\n')
-              .trim() || '';
+        try {
+          const unified = await invokeCanonicalModelText({
+            modelId: candidateId,
+            systemPrompt: seatSystemPrompt,
+            userPrompt: seatUserPrompt,
+            maxTokens: 450,
+            temperature: 0.2,
+          });
+          let text = unified?.text || '';
+          const resolvedProvider = unified?.provider || candidate.provider;
+          const resolvedModelId = unified?.upstreamModelId || candidateId;
+
+          if (!text) {
+            const client = this.getBedrockClient();
+            const response = await client.send(
+              new ConverseCommand({
+                modelId: candidateId,
+                system: [{ text: seatSystemPrompt }],
+                messages: [{ role: 'user', content: [{ text: seatUserPrompt }] }],
+                inferenceConfig: { maxTokens: 450, temperature: 0.2 },
+              })
+            );
+            text =
+              response.output?.message?.content
+                ?.map((c: any) => c.text || c.reasoningContent?.reasoningText?.text || '')
+                .join('\n')
+                .trim() || '';
+          }
 
           if (text) {
             const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
             return {
               seatId: params.seatId,
               roleTitle: params.roleTitle,
-              modelId: candidateId,
+              modelId: resolvedModelId,
               modelName: candidate.name,
-              provider: candidate.provider,
+              provider: resolvedProvider,
               selectionReason,
               inspectedFiles,
               keyFindings: lines.slice(0, 2),
@@ -650,43 +737,43 @@ Respond concisely with:
   }> {
     if (this.hasAwsCredentials()) {
       const chairCandidates = [chairDecision.selectedModel, ...chairDecision.failoverChain.slice(0, 2)];
-      const seatBriefs = seats
-        .map(
-          (s) =>
-            `[${s.roleTitle} — ${s.modelName}]\nFiles: ${s.inspectedFiles.join(', ')}\nProposal: ${s.hypothesisOrProposal}\nRisk/Edge Case: ${s.riskOrEdgeCase}`
-        )
-        .join('\n\n');
+      const seatBriefs = buildAnonymizedCouncilBriefs(seats);
 
       for (const candidate of chairCandidates) {
         const candidateId = candidate.inferenceProfileId || candidate.id;
-        try {
-          const client = this.getBedrockClient();
-          const res = await client.send(
-            new ConverseCommand({
-              modelId: candidateId,
-              system: [
-                {
-                  text: `You are the Chair of Lyra's Multi-Model Council (${candidate.name}, mode: ${mode}).
+        const chairSystemPrompt = `You are the Chair of Lyra's Multi-Model Council (${candidate.name}, mode: ${mode}).
 Cross-examine the 3 specialist model briefs and return JSON with keys:
 "consensus" (array of 2 strings where models agree),
 "disagreements" (array of 1-2 strings highlighting trade-offs or edge-case tensions between the models),
-"recommendedSolution" (string with concrete, actionable resolution citing the inspected files).`,
-                },
-              ],
-              messages: [
-                {
-                  role: 'user',
-                  content: [{ text: `Question: ${question}\n\nSpecialist Briefs:\n${seatBriefs}` }],
-                },
-              ],
-              inferenceConfig: { maxTokens: 600, temperature: 0.1 },
-            })
-          );
+"recommendedSolution" (string with concrete, actionable resolution citing the inspected files).`;
+        const chairUserPrompt = `Question: ${question}\n\nSpecialist Briefs:\n${seatBriefs}`;
 
-          const rawText =
-            res.output?.message?.content
-              ?.map((c: any) => c.text || c.reasoningContent?.reasoningText?.text || '')
-              .join('\n') || '';
+        try {
+          const unified = await invokeCanonicalModelText({
+            modelId: candidateId,
+            systemPrompt: chairSystemPrompt,
+            userPrompt: chairUserPrompt,
+            maxTokens: 600,
+            temperature: 0.1,
+          });
+          let rawText = unified?.text || '';
+
+          if (!rawText) {
+            const client = this.getBedrockClient();
+            const res = await client.send(
+              new ConverseCommand({
+                modelId: candidateId,
+                system: [{ text: chairSystemPrompt }],
+                messages: [{ role: 'user', content: [{ text: chairUserPrompt }] }],
+                inferenceConfig: { maxTokens: 600, temperature: 0.1 },
+              })
+            );
+
+            rawText =
+              res.output?.message?.content
+                ?.map((c: any) => c.text || c.reasoningContent?.reasoningText?.text || '')
+                .join('\n') || '';
+          }
           const jsonMatch = rawText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);

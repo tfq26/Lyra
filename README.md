@@ -2,7 +2,7 @@
 
 Lyra is the cloud backend, authentication hub, LLM gateway proxy, and swarm runner for [Gram](../Gram) and external coding harnesses.
 
-Production runs on Cloudflare Containers (`https://lyra.2helix.org`) via `cloudflare.config.ts` and `worker.ts`, routing inference to Amazon Bedrock and OpenRouter, authenticating users with Better Auth, and persisting runs either in local SQLite (`server/data/`) or AWS PostgreSQL/SQS/Fargate when configured.
+Production runs on Cloudflare Containers (`https://lyra.2helix.org`) via `cloudflare.config.ts` and `worker.ts`, routing inference across Amazon Bedrock, Microsoft Azure AI Foundry, and OpenRouter, authenticating users with Better Auth, and persisting runs either in local SQLite (`server/data/`) or AWS PostgreSQL/SQS/Fargate when configured.
 
 ## What Lyra Handles
 
@@ -10,8 +10,10 @@ Production runs on Cloudflare Containers (`https://lyra.2helix.org`) via `cloudf
    - Powered by Better Auth with Google OAuth, email/password accounts, account linking (`trustedProviders: ['google']`), and WebAuthn passkeys.
    - Issues both browser cookies and Bearer session tokens (`/api/auth/gram-start`, `/api/auth/gram-handoff`) so desktop and web Gram clients can sign in without copying API keys manually.
    - Uses SQLite (`server/data/auth.sqlite`) in local/container mode by default, or AWS Aurora/RDS PostgreSQL (`auth` schema) when `LYRA_DATABASE_HOST` is set.
-2. **Central LLM Gateway (`server/gatewayLlmProxy.ts`)**:
-   - `POST /api/gateway/llm/stream` proxies streaming, tool-capable turns to Amazon Bedrock (`ConverseStreamCommand` with prompt caching) and OpenRouter / OpenAI-compatible endpoints.
+2. **Central LLM Gateway & Auto Router (`server/gatewayLlmProxy.ts`, `server/unifiedModelCatalog.ts`, `server/modelDecisionEngine.ts`)**:
+   - `POST /api/gateway/llm/stream` proxies streaming, tool-capable turns to Amazon Bedrock (`ConverseStreamCommand` with prompt caching), Microsoft Azure AI Foundry (`gpt-4o`, `MAI-Thinking-1`, `Phi-4-reasoning`, and OpenAI-compatible deployments), and OpenRouter / OpenAI-compatible endpoints.
+   - `auto` model selection (`buildConfiguredAutoCatalog` + `ModelDecisionEngine.decideOptimalModel`) evaluates only configured, healthy, non-cooldown routes and appends a cross-provider fallback tail (`gpt-4o`, `mai-thinking-1`, `phi-4-reasoning`, `claude-sonnet-4-6`, `claude-haiku-4-5`, `nova-2-lite`).
+   - Automatically cools down or marks access-denied models on `400` (`ValidationException`), `403` (`AccessDeniedException`), `404` (`DeploymentNotFound`), `429`, `503`, and `529` so turns fail over cleanly across providers.
    - Enforces `standard`, `zdr` (zero data retention), and `local-only` privacy policies, redacts inline credentials (`server/security.ts`), and emits structured `diagnostics` on SSE stream errors.
 3. **Adaptive Execution and Swarm Orchestration**:
    - `server/intentTriage.ts` routes turns across instant responses, single-file AST-verified patches (`server/fastLaneExecutor.ts`), and full multi-agent DAG swarms (`server/teamCoordinator.ts`).
@@ -59,7 +61,7 @@ Important URLs in local dev:
 bunx cf deploy
 ```
 
-Make sure secrets (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally `LYRA_GATEWAY_API_KEY`) are configured in Cloudflare Worker secrets so `worker.ts` forwards them into the container environment.
+Make sure secrets (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AZURE_FOUNDRY_ENDPOINT`, `AZURE_FOUNDRY_API_KEY`, `OPENROUTER_API_KEY`, and optionally `LYRA_GATEWAY_API_KEY`) are configured in Cloudflare Worker secrets so `worker.ts` forwards them into the container environment.
 
 ### AWS Fargate Runner
 
@@ -85,6 +87,8 @@ See [infra/aws/README.md](infra/aws/README.md) for CloudFormation stack paramete
 | `LYRA_GATEWAY_API_KEY` | unset | Static API key accepted alongside Better Auth sessions |
 | `AWS_REGION` | `us-east-1` | Region for Bedrock, Secrets Manager, SES, SQS, and ECS |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CLI credential export | Credentials for AWS Bedrock `ConverseStreamCommand` |
+| `AZURE_FOUNDRY_ENDPOINT` / `AZURE_FOUNDRY_API_KEY` | unset | Azure AI Foundry OpenAI-v1 endpoint and API key (forwarded by `worker.ts`) |
+| `AZURE_FOUNDRY_API_VERSION` | `2025-04-01-preview` | API version used for Azure AI Foundry requests |
 | `OPENROUTER_API_KEY` | unset | API key for upstream OpenRouter models |
 | `LYRA_DATABASE_HOST` (+ `PORT`/`NAME`/`USER`/`PASSWORD`) | SQLite fallback | Switches Better Auth to AWS PostgreSQL (`auth` schema) |
 
@@ -95,7 +99,7 @@ See [infra/aws/README.md](infra/aws/README.md) for CloudFormation stack paramete
 bun run typecheck
 
 # Gateway, auth, routing, and coordinator unit tests
-bun test server/adaptivePipeline.test.ts server/ahpProtocol.test.ts server/gateway.test.ts server/ecsNativeDispatcher.test.ts server/bedrockModelCatalog.test.ts server/modelDecisionEngine.test.ts server/teamCoordinator.test.ts
+bun test server/unifiedModelCatalog.test.ts server/privacyAndGateway.test.ts server/adaptivePipeline.test.ts server/ahpProtocol.test.ts server/gateway.test.ts server/ecsNativeDispatcher.test.ts server/bedrockModelCatalog.test.ts server/modelDecisionEngine.test.ts server/teamCoordinator.test.ts
 ```
 
 ## Further Documentation
