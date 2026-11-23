@@ -7,6 +7,7 @@ import { bearer } from 'better-auth/plugins/bearer';
 import { PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
 import { Database } from 'bun:sqlite';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { IncomingHttpHeaders } from 'node:http';
@@ -28,7 +29,12 @@ let sesClient: SESv2Client | null = null;
 async function sendAuthEmail(to: string, subject: string, url: string) {
   const from = process.env.LYRA_SES_FROM_EMAIL;
   if (process.env.LYRA_HOSTED !== 'true' || !from) {
-    console.info(`[Lyra Auth] ${subject} for ${to}: ${url}`);
+    if (process.env.LYRA_HOSTED === 'true') {
+      // Never write account-takeover links (reset/verify URLs) to hosted logs.
+      console.warn(`[Lyra Auth] "${subject}" email not sent: LYRA_SES_FROM_EMAIL is not configured.`);
+    } else {
+      console.info(`[Lyra Auth] ${subject} for ${to}: ${url}`);
+    }
     return;
   }
   sesClient ||= new SESv2Client({ region: process.env.LYRA_SES_REGION || process.env.AWS_REGION || 'us-east-1' });
@@ -51,6 +57,9 @@ async function sendAuthEmail(to: string, subject: string, url: string) {
 
 function resolveSecret(): string {
   if (process.env.BETTER_AUTH_SECRET) return process.env.BETTER_AUTH_SECRET;
+  if (process.env.LYRA_HOSTED === 'true') {
+    throw new Error('BETTER_AUTH_SECRET must be set when LYRA_HOSTED=true');
+  }
   const secretPath = path.resolve('server/data/.auth-secret');
   try {
     if (fs.existsSync(secretPath)) {
@@ -58,7 +67,7 @@ function resolveSecret(): string {
       if (existing.length >= 32) return existing;
     }
   } catch {}
-  const generated = 'lyra_' + Array.from({ length: 48 }, () => Math.random().toString(36)[2] || '0').join('');
+  const generated = 'lyra_' + randomBytes(32).toString('hex');
   try {
     const dir = path.dirname(secretPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -142,7 +151,8 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
       accountLinking: {
         enabled: true,
         trustedProviders: ['google'],
-        requireLocalEmailVerified: false,
+        // Do not set requireLocalEmailVerified: false. Linking Google to an unverified
+        // password account lets a pre-registered attacker keep password access.
       },
     },
     socialProviders:
@@ -158,7 +168,7 @@ export async function initializeBetterAuth(): Promise<LyraBetterAuthRuntime | nu
       enabled: true,
       requireEmailVerification: process.env.LYRA_HOSTED === 'true' && Boolean(process.env.LYRA_SES_FROM_EMAIL),
       disableSignUp: process.env.LYRA_AUTH_DISABLE_SIGNUP === 'true',
-      minPasswordLength: 6,
+      minPasswordLength: 8,
       maxPasswordLength: 128,
       sendResetPassword: async ({ user, url }) => sendAuthEmail(user.email, 'Reset your Lyra password', url),
     },
