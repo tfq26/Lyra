@@ -67,9 +67,12 @@ export class EcsNativeDispatcher {
   }
 
   public async getTaskStatus(runId: string): Promise<{ running: boolean; taskArn?: string; status?: string }> {
-    const taskArn = this.taskArns.get(runId) || (await this.findTaskArn(runId));
-    if (!taskArn || !this.cluster) return { running: false };
+    let taskArn = this.taskArns.get(runId);
     try {
+      // Both the ARN lookup and the describe call hit AWS; an outage or expired credentials
+      // must degrade to "not running" rather than throwing out of a status query.
+      taskArn ||= await this.findTaskArn(runId);
+      if (!taskArn || !this.cluster) return { running: false };
       const described = await this.client.send(
         new DescribeTasksCommand({ cluster: this.cluster, tasks: [taskArn] })
       );
@@ -79,8 +82,11 @@ export class EcsNativeDispatcher {
         taskArn,
         status: task?.lastStatus || 'UNKNOWN',
       };
-    } catch {
-      return { running: false, taskArn };
+    } catch (error) {
+      console.warn(
+        `[Lyra ECS] Could not read task status for run ${runId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return { running: false, taskArn, status: 'UNKNOWN' };
     }
   }
 

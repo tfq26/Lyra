@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from 'bun:test';
+import { afterEach, beforeEach, describe, it, expect, spyOn } from 'bun:test';
 import { EcsNativeDispatcher } from './ecsNativeDispatcher';
 
 const ENV_KEYS = ['LYRA_HOSTED', 'LYRA_ECS_CLUSTER'] as const;
@@ -70,5 +70,35 @@ describe('EcsNativeDispatcher', () => {
 
     const status = await dispatcher.getTaskStatus('run-3');
     expect(status.running).toBe(false);
+  });
+
+  it('returns not running instead of throwing when the ARN lookup fails', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { dispatcher } = createDispatcher(() => {
+        throw new Error('Unable to refresh credentials');
+      });
+
+      const status = await dispatcher.getTaskStatus('run-4');
+      expect(status).toEqual({ running: false, taskArn: undefined, status: 'UNKNOWN' });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('returns not running instead of throwing when describing a known task fails', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { dispatcher } = createDispatcher(() => {
+        throw new Error('ThrottlingException');
+      });
+      (dispatcher as any).taskArns.set('run-5', 'arn:known');
+
+      const status = await dispatcher.getTaskStatus('run-5');
+      expect(status).toEqual({ running: false, taskArn: 'arn:known', status: 'UNKNOWN' });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
