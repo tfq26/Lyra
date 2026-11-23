@@ -1,110 +1,36 @@
 # Lyra
 
-Lyra is the cloud backend, authentication hub, LLM gateway proxy, and swarm runner for [Gram](../Gram) and external coding harnesses.
+**Lyra** is the cloud brain, authentication hub, multi-provider LLM gateway, and swarm runner powering **[Gram](../Gram)** (`https://lyra.2helix.org`).
 
-Production runs on Cloudflare Containers (`https://lyra.2helix.org`) via `cloudflare.config.ts` and `worker.ts`, routing inference across Amazon Bedrock, Microsoft Azure AI Foundry, and OpenRouter, authenticating users with Better Auth, and persisting runs either in local SQLite (`server/data/`) or AWS PostgreSQL/SQS/Fargate when configured.
+> Looking to run locally, configure secrets, or deploy to Cloudflare / AWS? See **[SETUP.md](SETUP.md)**.  
+> For the full product overview, user flows, and roadmap through the Gram workspace, see **[Gram/README.md](../Gram/README.md)**.
 
-## What Lyra Handles
+---
 
-1. **Authentication Hub (`server/betterAuth.ts`, `server/index.ts`)**:
-   - Powered by Better Auth with Google OAuth, email/password accounts, account linking (`trustedProviders: ['google']`), and WebAuthn passkeys.
-   - Issues both browser cookies and Bearer session tokens (`/api/auth/gram-start`, `/api/auth/gram-handoff`) so desktop and web Gram clients can sign in without copying API keys manually.
-   - Uses SQLite (`server/data/auth.sqlite`) in local/container mode by default, or AWS Aurora/RDS PostgreSQL (`auth` schema) when `LYRA_DATABASE_HOST` is set.
-2. **Central LLM Gateway & Auto Router (`server/gatewayLlmProxy.ts`, `server/unifiedModelCatalog.ts`, `server/modelDecisionEngine.ts`)**:
-   - `POST /api/gateway/llm/stream` proxies streaming, tool-capable turns to Amazon Bedrock (`ConverseStreamCommand` with prompt caching), Microsoft Azure AI Foundry (`gpt-4o`, `MAI-Thinking-1`, `Phi-4-reasoning`, and OpenAI-compatible deployments), and OpenRouter / OpenAI-compatible endpoints.
-   - `auto` model selection (`buildConfiguredAutoCatalog` + `ModelDecisionEngine.decideOptimalModel`) evaluates only configured, healthy, non-cooldown routes and appends a cross-provider fallback tail (`gpt-4o`, `mai-thinking-1`, `phi-4-reasoning`, `claude-sonnet-4-6`, `claude-haiku-4-5`, `nova-2-lite`).
-   - Automatically cools down or marks access-denied models on `400` (`ValidationException`), `403` (`AccessDeniedException`), `404` (`DeploymentNotFound`), `429`, `503`, and `529` so turns fail over cleanly across providers.
-   - Enforces `standard`, `zdr` (zero data retention), and `local-only` privacy policies, redacts inline credentials (`server/security.ts`), and emits structured `diagnostics` on SSE stream errors.
-3. **Adaptive Execution and Swarm Orchestration**:
-   - `server/intentTriage.ts` routes turns across instant responses, single-file AST-verified patches (`server/fastLaneExecutor.ts`), and full multi-agent DAG swarms (`server/teamCoordinator.ts`).
-   - `server/worktreeManager.ts` isolates swarm tasks into Git shadow worktrees (`.lyra/worktrees/`) and `server/proofSandbox/` runs verification commands before integration.
-   - `server/ecsNativeDispatcher.ts` and `server/sqsTaskQueue.ts` support offloading cloud runs to AWS ECS Fargate via Amazon SQS + S3 claim-check.
-4. **MCP Server and Telemetry**:
-   - `server/harnessMcpServer.ts` (and `scripts/mcp-server-stdio.ts`) exposes Lyra tools over MCP (`lyra_dispatch_task`, `lyra_get_run_status`, `lyra_inspect_diff`, `lyra_create_github_pr`, etc.).
-   - `server/cloudwatchEmf.ts` emits CloudWatch Embedded Metric Format telemetry.
+## Why Lyra Exists
 
-## Running Locally
+Gram keeps your code, `GramFS` overlays, Semantic Graph, and Personal Context fast and private on your own machine—while **Lyra** handles everything that benefits from a unified cloud control plane:
 
-Prerequisites: [Bun](https://bun.sh) 1.2+.
+- **Single Sign-On Without Key Juggling:** Better Auth (Google OAuth, email/password, WebAuthn passkeys) issues browser sessions and Tauri desktop handoff tokens (`/api/auth/gram-start`, `/api/auth/gram-handoff`) so Gram connects securely without manual API key setup.
+- **Multi-Provider Resilience (`auto` Routing):** Instead of hardcoding a single model vendor, Lyra's `UnifiedModelCatalog` and `ModelDecisionEngine` route `auto` requests across **Amazon Bedrock**, **Microsoft Azure AI Foundry** (`gpt-4o`, `MAI-Thinking-1`, `Phi-4-reasoning`), and **OpenRouter**—evaluating only configured, healthy, non-cooldown routes and failing over automatically on `400`, `403`, `404`, `429`, `503`, or `529`.
+- **Privacy & Secret Guardrails:** Enforces `standard`, `zdr` (zero data retention), and `local-only` policies, redacts inline secrets (`server/security.ts`), and emits structured `diagnostics` on SSE errors.
+- **Adaptive Execution & Cloud Swarms:** Routes turns across instant replies, single-file AST-verified patches (`server/fastLaneExecutor.ts`), isolated Git worktree swarms (`server/teamCoordinator.ts`, `server/worktreeManager.ts`), and optional AWS ECS Fargate / SQS offloading (`server/ecsNativeDispatcher.ts`, `server/sqsTaskQueue.ts`).
+- **MCP & Telemetry:** Exposes Lyra tools over MCP (`server/harnessMcpServer.ts`) and emits CloudWatch Embedded Metric Format telemetry (`server/cloudwatchEmf.ts`).
 
-```bash
-bun install
-```
+---
 
-Start the Lyra HTTP + WebSocket server on port `3001`:
+## Current State & Roadmap
 
-```bash
-bun run dev
-```
+- **Currently Working:** Cloudflare Containers production deployment (`lyra.2helix.org`), Better Auth + Google OAuth + Tauri desktop handoff, multi-provider LLM gateway (Bedrock + Azure AI Foundry + OpenRouter) with configured-pool `auto` selection and automatic cooldown/failover, privacy policy enforcement, and SQLite/PostgreSQL persistence.
+- **In Progress:** Scaling AWS Fargate/SQS/Aurora swarm offloading, proof-sandbox verification pipelines (`server/proofSandbox/`), and expanding deployed Foundry/Bedrock model coverage.
+- **Future Features:** Trajectory-based mid-run model escalation, deeper multi-agent council/review workflows, and expanded MCP PR/maintenance automation.
 
-Start the React web portal on port `5173` (optional):
-
-```bash
-cd site && bun run dev
-```
-
-Important URLs in local dev:
-
-- `http://localhost:3001/api/health` -- Hub liveness check
-- `http://localhost:3001/api/auth/status` -- Public auth provider capabilities
-- `http://localhost:5173` -- Web portal
-- `http://localhost:5173/console` -- Cloud console and telemetry view
-- `http://localhost:5173/login` -- Sign-in and passkey management
-
-## Deploying to Production
-
-### Cloudflare Containers (`https://lyra.2helix.org`)
-
-`cloudflare.config.ts` binds the Durable Object container (`LyraContainer` in `worker.ts`, built from `Dockerfile`) to `lyra-hub` on domain `lyra.2helix.org`.
-
-```bash
-bunx cf deploy
-```
-
-Make sure secrets (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AZURE_FOUNDRY_ENDPOINT`, `AZURE_FOUNDRY_API_KEY`, `OPENROUTER_API_KEY`, and optionally `LYRA_GATEWAY_API_KEY`) are configured in Cloudflare Worker secrets so `worker.ts` forwards them into the container environment.
-
-### AWS Fargate Runner
-
-```bash
-bun run deploy:aws
-```
-
-See [infra/aws/README.md](infra/aws/README.md) for CloudFormation stack parameters and VPC/EFS/RDS setup.
-
-## Environment Variables
-
-`server/index.ts` loads `.env.local` and `.env` on startup, and refreshes temporary AWS credentials via `aws configure export-credentials --format process` every 10 minutes when static AWS keys are absent.
-
-| Variable | Default / Fallback | Purpose |
-| :--- | :--- | :--- |
-| `PORT` / `LYRA_HUB_PORT` | `3001` | HTTP and WebSocket listen port (`worker.ts` uses `3001`) |
-| `BETTER_AUTH_URL` | `http://localhost:3001` | Public base URL (`https://lyra.2helix.org` in production) |
-| `BETTER_AUTH_SECRET` | Auto-generated in `server/data/.auth-secret` | Session signing secret (set explicitly in production) |
-| `BETTER_AUTH_TRUSTED_ORIGINS` | Local dev ports + `tauri://localhost` | Comma-separated extra allowed origins |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | unset | Enables Google OAuth (`googleEnabled: true`) |
-| `LYRA_HOSTED` | unset (`false`) | Enables hosted security mode (`true` in `worker.ts`) |
-| `LYRA_AUTH_DISABLE_SIGNUP` | unset (`false`) | Set to `true` to disable new self-service registrations |
-| `LYRA_GATEWAY_API_KEY` | unset | Static API key accepted alongside Better Auth sessions |
-| `AWS_REGION` | `us-east-1` | Region for Bedrock, Secrets Manager, SES, SQS, and ECS |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CLI credential export | Credentials for AWS Bedrock `ConverseStreamCommand` |
-| `AZURE_FOUNDRY_ENDPOINT` / `AZURE_FOUNDRY_API_KEY` | unset | Azure AI Foundry OpenAI-v1 endpoint and API key (forwarded by `worker.ts`) |
-| `AZURE_FOUNDRY_API_VERSION` | `2025-04-01-preview` | API version used for Azure AI Foundry requests |
-| `OPENROUTER_API_KEY` | unset | API key for upstream OpenRouter models |
-| `LYRA_DATABASE_HOST` (+ `PORT`/`NAME`/`USER`/`PASSWORD`) | SQLite fallback | Switches Better Auth to AWS PostgreSQL (`auth` schema) |
-
-## Testing and Typechecking
-
-```bash
-# TypeScript validation
-bun run typecheck
-
-# Gateway, auth, routing, and coordinator unit tests
-bun test server/unifiedModelCatalog.test.ts server/privacyAndGateway.test.ts server/adaptivePipeline.test.ts server/ahpProtocol.test.ts server/gateway.test.ts server/ecsNativeDispatcher.test.ts server/bedrockModelCatalog.test.ts server/modelDecisionEngine.test.ts server/teamCoordinator.test.ts
-```
+---
 
 ## Further Documentation
 
-- [docs/api.md](docs/api.md) -- HTTP, SSE gateway, Better Auth handoff, and WebSocket endpoints
-- [docs/architecture-and-features.md](docs/architecture-and-features.md) -- System architecture, routing, worktrees, and AWS integrations
-- [docs/product-spec.md](docs/product-spec.md) -- Native Strands coding harness specification
-- [infra/aws/README.md](infra/aws/README.md) -- AWS infrastructure templates and deployment notes
+- **[SETUP.md](SETUP.md)** -- Local dev, Cloudflare/AWS deployment, environment variables, and test commands
+- **[docs/api.md](docs/api.md)** -- HTTP, SSE gateway, Better Auth handoff, and WebSocket endpoints
+- **[docs/architecture-and-features.md](docs/architecture-and-features.md)** -- System architecture, routing, worktrees, and AWS integrations
+- **[docs/product-spec.md](docs/product-spec.md)** -- Native Strands coding harness specification
+- **[infra/aws/README.md](infra/aws/README.md)** -- AWS infrastructure templates and deployment notes
