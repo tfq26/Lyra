@@ -1119,6 +1119,12 @@ export const MODEL_ID_ALIASES: Record<string, string> = {
   'mistralai/mistral-large-4-0': 'mistral-large-4',
   'x-ai/grok-4.20': 'grok-4.20',
   'meta/muse-spark-1.3': 'muse-spark-1.3',
+  // Provider-native ids that were only reachable as route upstream ids, so alias resolution
+  // (and therefore resolveProviderRoutes) found no model for them.
+  'us.amazon.nova-pro-v1:0': 'nova-2-pro',
+  'MAI-Code-1.1-Flash': 'mai-code-1-1-flash',
+  'MAI-Thinking-1': 'mai-thinking-1',
+  'openai/gpt-4o': 'gpt-4o',
 };
 
 const routeCooldowns = new Map<string, number>();
