@@ -55,6 +55,22 @@ Searches `active`, `legacy` and `candidate` models (override with `include=legac
 
 Body: `{ "status": "legacy", "reason": "...", "supersededBy": "gpt-5" }`. Requires the gateway API key itself (user session tokens are rejected with `403`). Returns `404` for unknown models, `409` for invalid transitions and `400` for bad input.
 
+Models discovered by sync are **unscored** (`scored: false`, `scores: null`) and cannot be activated without scores. To promote one, add `"scores": { "coding": 88, "reasoning": 84, "toolProficiency": 86, "tokensPerSecond": 120 }` (the first three are required, 0-100). Add `"zdrVerified": true` to clear the "zero-data-retention not verified" warning, otherwise the model stays out of `zdr` mode. Sending `scores` with `"status": "candidate"` records the scores without activating.
+
+### `POST /api/gateway/llm/models/sync` (admin)
+
+Discovers new models and syncs prices and removals from providers (`LYRA_MODEL_SYNC_PROVIDERS`, default `openrouter`). **Dry run unless `"apply": true`.** Body (all optional): `{ "apply": false, "acceptPriceChanges": "all" | ["grok-4.20:openrouter"], "maxNewModels": 25 }`. Returns a report per provider: `newCandidates`, `skipped` (reason counts), `priceChanges` (`applied`, `would-apply`, `held`, `cleared`), `missing`, `expiring` and `reappeared`. Returns `409` if a sync is already running.
+
+What a sync does, per provider listing:
+
+- **New models** become unscored `candidate`s (published in the last 60 days, tool-capable, text output, 32k+ context, priced, from a tracked vendor, not a variant such as `:free`). At most 25 per run.
+- **Prices** are stored as per-provider overrides; the catalog's other fields are untouched. Changes over 50% are *held* until accepted; differences under 1% are ignored.
+- **Missing models** are retired after 2 consecutive syncs without them, only when every provider serving the model was synced, at most 5 per run.
+- **Announced removals** (a provider expiration date within 14 days) move an active model to `legacy`.
+- A failed download, or a listing under 20 models, changes nothing.
+
+The same sync runs from the CLI (`bun run models:sync`, `--apply`, `--accept-prices=...`) and optionally on a schedule (`LYRA_MODEL_SYNC_INTERVAL_HOURS`, off by default). Only OpenRouter has an adapter today; Bedrock and Foundry need their own.
+
 ### `GET /api/gateway/llm/models/events?modelId=&limit=` (admin)
 
 Lifecycle history, newest first. Requires the gateway API key.

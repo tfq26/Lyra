@@ -74,13 +74,14 @@ describe('Unified Canonical Model Catalog & Capacity Router', () => {
     expect(Array.isArray(sonnet.workflowGroups)).toBe(true);
 
     for (const m of models) {
-      for (const score of Object.values(m.scores)) {
+      expect(m.scored).toBe(true);
+      for (const score of Object.values(m.scores!)) {
         expect(score).toBeGreaterThanOrEqual(0);
         expect(score).toBeLessThanOrEqual(100);
       }
     }
     // The fastest model in the catalog defines the top of the speed scale.
-    expect(Math.max(...models.map((m) => m.scores.speed))).toBe(100);
+    expect(Math.max(...models.map((m) => m.scores!.speed))).toBe(100);
   });
 
   test('every alias served to clients resolves back to its canonical model', () => {

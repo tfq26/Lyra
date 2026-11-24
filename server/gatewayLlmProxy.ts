@@ -277,12 +277,16 @@ function toGatewayModel(m: CanonicalModelProfile, privacyMode: PrivacyMode, alia
     pricing: primary
       ? { inputPerMillion: primary.pricing.inputPerMillion, outputPerMillion: primary.pricing.outputPerMillion }
       : undefined,
-    scores: {
-      coding: m.metrics.codingScore,
-      reasoning: m.metrics.reasoningScore,
-      toolProficiency: m.metrics.toolProficiency,
-      speed: speedScore(m.metrics.tokensPerSecond),
-    },
+    // Discovered models carry placeholder metrics until someone scores them; clients get no scores.
+    scored: !m.unscored,
+    scores: m.unscored
+      ? null
+      : {
+          coding: m.metrics.codingScore,
+          reasoning: m.metrics.reasoningScore,
+          toolProficiency: m.metrics.toolProficiency,
+          speed: speedScore(m.metrics.tokensPerSecond),
+        },
     workflowGroups: m.workflowGroups ?? [],
     contributorWarning: m.routes.find((r) => r.contributorWarning)?.contributorWarning,
     aliases: aliasesByModel.get(m.id) ?? [],

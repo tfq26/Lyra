@@ -69,6 +69,11 @@ export interface CanonicalModelProfile {
   };
   strengths: string[];
   routes: ProviderRoute[];
+  /**
+   * True for discovered models whose capability scores have not been measured. Their metrics are
+   * placeholders and are not served to clients; scoring a model clears the flag.
+   */
+  unscored?: boolean;
 }
 
 export interface ResolvedProviderRoute extends ProviderRoute {
@@ -1161,12 +1166,37 @@ export function normalizeCanonicalModelId(modelId: string): string {
   return MODEL_ID_ALIASES[trimmed] || trimmed;
 }
 
-/** Seed catalog plus runtime-registered models (see `modelRegistry.ts`). Registered entries win on id clashes. */
+let mergedCatalogCache: { version: number; models: CanonicalModelProfile[] } | null = null;
+
+/**
+ * Seed catalog plus runtime-registered models (see `modelRegistry.ts`), with provider-synced route
+ * prices applied. Registered entries win on id clashes. The result is cached until the registry
+ * changes, because routing calls this on hot paths. Seed objects are never mutated.
+ */
 export function allCatalogModels(): CanonicalModelProfile[] {
+  const version = modelRegistry.version;
+  if (mergedCatalogCache?.version === version) return mergedCatalogCache.models;
+
   const dynamic = modelRegistry.dynamicProfiles();
-  if (dynamic.length === 0) return UNIFIED_MODEL_CATALOG;
   const dynamicIds = new Set(dynamic.map((m) => m.id));
-  return [...UNIFIED_MODEL_CATALOG.filter((m) => !dynamicIds.has(m.id)), ...dynamic];
+  const base = dynamic.length === 0 ? UNIFIED_MODEL_CATALOG : [...UNIFIED_MODEL_CATALOG.filter((m) => !dynamicIds.has(m.id)), ...dynamic];
+
+  const models = base.map((model) => {
+    const overrides = modelRegistry.getRecord(model.id)?.priceOverrides;
+    if (!overrides) return model;
+    return {
+      ...model,
+      routes: model.routes.map((route) => {
+        const override = overrides[route.provider];
+        return override
+          ? { ...route, pricing: { inputPerMillion: override.inputPerMillion, outputPerMillion: override.outputPerMillion } }
+          : route;
+      }),
+    };
+  });
+
+  mergedCatalogCache = { version, models };
+  return models;
 }
 
 /** Lifecycle status of a model: seed models are `active` unless the registry says otherwise. */

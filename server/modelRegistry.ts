@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Database } from 'bun:sqlite';
 import postgres from 'postgres';
-import type { CanonicalModelProfile } from './unifiedModelCatalog';
+import type { BackendProvider, CanonicalModelProfile } from './unifiedModelCatalog';
 import { resolvePostgresConfig } from './postgresConfig';
 
 export type ModelLifecycleStatus = 'candidate' | 'active' | 'legacy' | 'retired';
@@ -41,9 +41,21 @@ export interface ModelLifecycleRecord {
   updatedBy: string;
   /** Full profile for models that are not part of the seed catalog. */
   profile?: CanonicalModelProfile;
+  /** Per-provider route prices that replace the seed prices. Seed edits to other fields still apply. */
+  priceOverrides?: Partial<Record<BackendProvider, RoutePriceOverride>>;
+  /** Consecutive provider syncs in which a provider's listing did not include this model. */
+  missedSyncs?: Partial<Record<BackendProvider, number>>;
 }
 
-export type ModelRegistryAction = 'add' | 'status' | 'supersede';
+export type ModelRegistryAction = 'add' | 'status' | 'supersede' | 'price' | 'profile';
+
+/** Price for one provider route that replaces the seed catalog's price (set by provider sync). */
+export interface RoutePriceOverride {
+  inputPerMillion: number;
+  outputPerMillion: number;
+  updatedAt: string;
+  source: string;
+}
 
 export interface ModelRegistryEvent {
   id: number;
@@ -61,8 +73,8 @@ export type ModelRegistryEventInput = Omit<ModelRegistryEvent, 'id'>;
 export interface ModelRegistryStore {
   init(): Promise<void>;
   loadRecords(): Promise<ModelLifecycleRecord[]>;
-  /** Atomically upserts the record and appends the audit event. */
-  save(record: ModelLifecycleRecord, event: ModelRegistryEventInput): Promise<void>;
+  /** Atomically upserts the record and appends the audit event (bookkeeping updates pass no event). */
+  save(record: ModelLifecycleRecord, event?: ModelRegistryEventInput | null): Promise<void>;
   listEvents(options?: { modelId?: string; limit?: number }): Promise<ModelRegistryEvent[]>;
   close(): Promise<void>;
 }
@@ -95,9 +107,9 @@ export class InMemoryModelRegistryStore implements ModelRegistryStore {
   async loadRecords(): Promise<ModelLifecycleRecord[]> {
     return Array.from(this.records.values()).map((r) => structuredClone(r));
   }
-  async save(record: ModelLifecycleRecord, event: ModelRegistryEventInput): Promise<void> {
+  async save(record: ModelLifecycleRecord, event?: ModelRegistryEventInput | null): Promise<void> {
     this.records.set(record.modelId, structuredClone(record));
-    this.events.push({ ...event, id: this.events.length + 1 });
+    if (event) this.events.push({ ...event, id: this.events.length + 1 });
   }
   async listEvents(options?: { modelId?: string; limit?: number }): Promise<ModelRegistryEvent[]> {
     return filterEvents(this.events, options);
@@ -132,8 +144,14 @@ export class SqliteModelRegistryStore implements ModelRegistryStore {
       first_seen_at TEXT NOT NULL,
       last_seen_at TEXT,
       updated_by TEXT NOT NULL,
-      profile TEXT
+      profile TEXT,
+      price_overrides TEXT,
+      missed_syncs TEXT
     )`);
+    // Databases created before price overrides and miss counters existed.
+    const columns = (this.db.query(`PRAGMA table_info(lyra_model_registry)`).all() as Array<{ name: string }>).map((c) => c.name);
+    if (!columns.includes('price_overrides')) this.db.run(`ALTER TABLE lyra_model_registry ADD COLUMN price_overrides TEXT`);
+    if (!columns.includes('missed_syncs')) this.db.run(`ALTER TABLE lyra_model_registry ADD COLUMN missed_syncs TEXT`);
     this.db.run(`CREATE TABLE IF NOT EXISTS lyra_model_registry_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       model_id TEXT NOT NULL,
@@ -160,20 +178,23 @@ export class SqliteModelRegistryStore implements ModelRegistryStore {
       lastSeenAt: r.last_seen_at ?? undefined,
       updatedBy: r.updated_by,
       profile: r.profile ? JSON.parse(r.profile) : undefined,
+      priceOverrides: r.price_overrides ? JSON.parse(r.price_overrides) : undefined,
+      missedSyncs: r.missed_syncs ? JSON.parse(r.missed_syncs) : undefined,
     }));
   }
 
-  async save(record: ModelLifecycleRecord, event: ModelRegistryEventInput): Promise<void> {
+  async save(record: ModelLifecycleRecord, event?: ModelRegistryEventInput | null): Promise<void> {
     const write = this.db.transaction(() => {
       this.db
         .query(
           `INSERT INTO lyra_model_registry
-             (model_id, status, reason, superseded_by, source, status_changed_at, first_seen_at, last_seen_at, updated_by, profile)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             (model_id, status, reason, superseded_by, source, status_changed_at, first_seen_at, last_seen_at, updated_by, profile, price_overrides, missed_syncs)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(model_id) DO UPDATE SET
              status = excluded.status, reason = excluded.reason, superseded_by = excluded.superseded_by,
              source = excluded.source, status_changed_at = excluded.status_changed_at,
-             last_seen_at = excluded.last_seen_at, updated_by = excluded.updated_by, profile = excluded.profile`
+             last_seen_at = excluded.last_seen_at, updated_by = excluded.updated_by, profile = excluded.profile,
+             price_overrides = excluded.price_overrides, missed_syncs = excluded.missed_syncs`
         )
         .run(
           record.modelId,
@@ -185,14 +206,18 @@ export class SqliteModelRegistryStore implements ModelRegistryStore {
           record.firstSeenAt,
           record.lastSeenAt ?? null,
           record.updatedBy,
-          record.profile ? JSON.stringify(record.profile) : null
+          record.profile ? JSON.stringify(record.profile) : null,
+          record.priceOverrides ? JSON.stringify(record.priceOverrides) : null,
+          record.missedSyncs ? JSON.stringify(record.missedSyncs) : null
         );
-      this.db
-        .query(
-          `INSERT INTO lyra_model_registry_events (model_id, at, actor, action, from_status, to_status, reason)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(event.modelId, event.at, event.actor, event.action, event.fromStatus ?? null, event.toStatus ?? null, event.reason ?? null);
+      if (event) {
+        this.db
+          .query(
+            `INSERT INTO lyra_model_registry_events (model_id, at, actor, action, from_status, to_status, reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(event.modelId, event.at, event.actor, event.action, event.fromStatus ?? null, event.toStatus ?? null, event.reason ?? null);
+      }
     });
     write();
   }
@@ -252,8 +277,12 @@ export class PostgresModelRegistryStore implements ModelRegistryStore {
       first_seen_at timestamptz NOT NULL,
       last_seen_at timestamptz,
       updated_by text NOT NULL,
-      profile jsonb
+      profile jsonb,
+      price_overrides jsonb,
+      missed_syncs jsonb
     )`;
+    await this.sql`ALTER TABLE lyra_model_registry ADD COLUMN IF NOT EXISTS price_overrides jsonb`;
+    await this.sql`ALTER TABLE lyra_model_registry ADD COLUMN IF NOT EXISTS missed_syncs jsonb`;
     await this.sql`CREATE TABLE IF NOT EXISTS lyra_model_registry_events (
       id bigserial PRIMARY KEY,
       model_id text NOT NULL,
@@ -281,22 +310,29 @@ export class PostgresModelRegistryStore implements ModelRegistryStore {
       lastSeenAt: r.last_seen_at ? iso(r.last_seen_at) : undefined,
       updatedBy: r.updated_by,
       profile: r.profile ?? undefined,
+      priceOverrides: r.price_overrides ?? undefined,
+      missedSyncs: r.missed_syncs ?? undefined,
     }));
   }
 
-  async save(record: ModelLifecycleRecord, event: ModelRegistryEventInput): Promise<void> {
+  async save(record: ModelLifecycleRecord, event?: ModelRegistryEventInput | null): Promise<void> {
     await this.sql.begin(async (tx: any) => {
       await tx`INSERT INTO lyra_model_registry
-          (model_id, status, reason, superseded_by, source, status_changed_at, first_seen_at, last_seen_at, updated_by, profile)
+          (model_id, status, reason, superseded_by, source, status_changed_at, first_seen_at, last_seen_at, updated_by, profile, price_overrides, missed_syncs)
         VALUES (${record.modelId}, ${record.status}, ${record.reason ?? null}, ${record.supersededBy ?? null}, ${record.source},
           ${record.statusChangedAt}, ${record.firstSeenAt}, ${record.lastSeenAt ?? null}, ${record.updatedBy},
-          ${record.profile ? tx.json(record.profile as any) : null})
+          ${record.profile ? tx.json(record.profile as any) : null},
+          ${record.priceOverrides ? tx.json(record.priceOverrides as any) : null},
+          ${record.missedSyncs ? tx.json(record.missedSyncs as any) : null})
         ON CONFLICT (model_id) DO UPDATE SET
           status = EXCLUDED.status, reason = EXCLUDED.reason, superseded_by = EXCLUDED.superseded_by,
           source = EXCLUDED.source, status_changed_at = EXCLUDED.status_changed_at,
-          last_seen_at = EXCLUDED.last_seen_at, updated_by = EXCLUDED.updated_by, profile = EXCLUDED.profile`;
-      await tx`INSERT INTO lyra_model_registry_events (model_id, at, actor, action, from_status, to_status, reason)
-        VALUES (${event.modelId}, ${event.at}, ${event.actor}, ${event.action}, ${event.fromStatus ?? null}, ${event.toStatus ?? null}, ${event.reason ?? null})`;
+          last_seen_at = EXCLUDED.last_seen_at, updated_by = EXCLUDED.updated_by, profile = EXCLUDED.profile,
+          price_overrides = EXCLUDED.price_overrides, missed_syncs = EXCLUDED.missed_syncs`;
+      if (event) {
+        await tx`INSERT INTO lyra_model_registry_events (model_id, at, actor, action, from_status, to_status, reason)
+          VALUES (${event.modelId}, ${event.at}, ${event.actor}, ${event.action}, ${event.fromStatus ?? null}, ${event.toStatus ?? null}, ${event.reason ?? null})`;
+      }
     });
   }
 
@@ -333,6 +369,12 @@ export interface StatusChangeOptions {
 export class ModelRegistry {
   private records = new Map<string, ModelLifecycleRecord>();
   private store: ModelRegistryStore = new InMemoryModelRegistryStore();
+  private changeCounter = 0;
+
+  /** Increases on every change; lets callers cache values derived from the registry. */
+  get version(): number {
+    return this.changeCounter;
+  }
 
   /** Switches to a persistent store and loads its records into memory. */
   async useStore(store: ModelRegistryStore): Promise<void> {
@@ -341,6 +383,7 @@ export class ModelRegistry {
     const previous = this.store;
     this.store = store;
     this.records = new Map(records.map((r) => [r.modelId, r]));
+    this.changeCounter++;
     if (previous !== store) await previous.close().catch(() => undefined);
   }
 
@@ -348,6 +391,7 @@ export class ModelRegistry {
   async reload(): Promise<void> {
     const records = await this.store.loadRecords();
     this.records = new Map(records.map((r) => [r.modelId, r]));
+    this.changeCounter++;
   }
 
   /** Back to an empty in-memory registry. Used by tests. */
@@ -397,6 +441,8 @@ export class ModelRegistry {
       lastSeenAt: existing?.lastSeenAt,
       updatedBy: cleanText(options.actor, 100) || 'unknown',
       profile: existing?.profile,
+      priceOverrides: existing?.priceOverrides,
+      missedSyncs: existing?.missedSyncs,
     };
     await this.store.save(next, {
       modelId,
@@ -408,7 +454,99 @@ export class ModelRegistry {
       reason: next.reason,
     });
     this.records.set(modelId, next);
+    this.changeCounter++;
     return next;
+  }
+
+  /**
+   * Sets (or, with `null`, clears) the price of one provider route. Seed edits to everything else
+   * about the model keep applying; only that route's price is replaced.
+   */
+  async setPriceOverride(
+    modelId: string,
+    provider: BackendProvider,
+    price: { inputPerMillion: number; outputPerMillion: number } | null,
+    options: { actor: string; reason?: string; source?: string }
+  ): Promise<ModelLifecycleRecord> {
+    const now = new Date().toISOString();
+    const existing = this.records.get(modelId);
+    const overrides = { ...(existing?.priceOverrides ?? {}) };
+    if (price) {
+      overrides[provider] = { ...price, updatedAt: now, source: cleanText(options.source, 60) ?? 'manual' };
+    } else {
+      delete overrides[provider];
+    }
+    const next: ModelLifecycleRecord = {
+      ...(existing ?? this.blankRecord(modelId, options.actor, now)),
+      priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+      updatedBy: cleanText(options.actor, 100) || 'unknown',
+    };
+    await this.store.save(next, {
+      modelId,
+      at: now,
+      actor: next.updatedBy,
+      action: 'price',
+      reason: cleanText(options.reason, 500),
+    });
+    this.records.set(modelId, next);
+    this.changeCounter++;
+    return next;
+  }
+
+  /**
+   * Quiet bookkeeping from provider syncs: miss counters and the last time a provider listed the
+   * model. Writes no audit event; status changes made because of misses are audited separately.
+   */
+  async recordSightings(
+    modelId: string,
+    update: { missedSyncs?: Partial<Record<BackendProvider, number>>; lastSeenAt?: string }
+  ): Promise<void> {
+    const existing = this.records.get(modelId);
+    const now = new Date().toISOString();
+    const next: ModelLifecycleRecord = {
+      ...(existing ?? this.blankRecord(modelId, 'model-sync', now)),
+      ...(update.missedSyncs ? { missedSyncs: update.missedSyncs } : {}),
+      ...(update.lastSeenAt ? { lastSeenAt: update.lastSeenAt } : {}),
+    };
+    await this.store.save(next, null);
+    this.records.set(modelId, next);
+    this.changeCounter++;
+  }
+
+  /** Replaces a registered model's profile (for example when a candidate is scored). */
+  async updateProfile(
+    modelId: string,
+    profile: CanonicalModelProfile,
+    options: { actor: string; reason?: string }
+  ): Promise<ModelLifecycleRecord> {
+    const existing = this.records.get(modelId);
+    if (!existing?.profile) {
+      throw new ModelRegistryError(`Model ${modelId} has no editable profile`, 'unknown_model');
+    }
+    const now = new Date().toISOString();
+    const next: ModelLifecycleRecord = { ...existing, profile, updatedBy: cleanText(options.actor, 100) || 'unknown' };
+    await this.store.save(next, {
+      modelId,
+      at: now,
+      actor: next.updatedBy,
+      action: 'profile',
+      reason: cleanText(options.reason, 500),
+    });
+    this.records.set(modelId, next);
+    this.changeCounter++;
+    return next;
+  }
+
+  /** A record for a seed model that has had no lifecycle changes yet. */
+  private blankRecord(modelId: string, actor: string, now: string): ModelLifecycleRecord {
+    return {
+      modelId,
+      status: 'active',
+      source: 'seed',
+      statusChangedAt: now,
+      firstSeenAt: now,
+      updatedBy: cleanText(actor, 100) || 'unknown',
+    };
   }
 
   /** Registers a model that is not in the seed catalog as a candidate. The profile must be validated by the caller. */
@@ -440,6 +578,7 @@ export class ModelRegistry {
       reason: record.reason,
     });
     this.records.set(profile.id, record);
+    this.changeCounter++;
     return record;
   }
 }

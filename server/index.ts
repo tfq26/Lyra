@@ -47,6 +47,7 @@ import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 import { handleGatewayLlmStream, listGatewayLlmModels, parseIncludedStatuses, searchGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
 import { setModelStatus } from './modelLifecycle';
+import { ModelSyncBusyError, parseAcceptedPriceChanges, runConfiguredModelSync, startModelSyncSchedule } from './modelSync';
 import { initModelRegistry, isModelLifecycleStatus, ModelRegistryError, modelRegistry } from './modelRegistry';
 import { sharedContextOptimizer } from './contextOptimizer';
 
@@ -565,6 +566,37 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Admin: discover new models and sync prices/removals from providers. Dry run unless `apply` is true.
+    if (url.pathname === '/api/gateway/llm/models/sync' && req.method === 'POST') {
+      if (!harnessGateway.verifyAdminKey(apiKey)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Gateway API key required.' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (c) => {
+        if (body.length < 16_384) body += c;
+      });
+      req.on('end', async () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const maxNew = Number(payload.maxNewModels);
+          const report = await runConfiguredModelSync({
+            apply: payload.apply === true,
+            actor: 'gateway-admin',
+            acceptPriceChanges: parseAcceptedPriceChanges(payload.acceptPriceChanges),
+            maxNewModels: Number.isFinite(maxNew) && maxNew >= 0 ? Math.min(maxNew, 100) : undefined,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(report));
+        } catch (err: any) {
+          res.writeHead(err instanceof ModelSyncBusyError ? 409 : 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Model sync failed.' }));
+        }
+      });
+      return;
+    }
+
     // Admin: change a model's lifecycle status (candidate | active | legacy | retired).
     const statusRoute = url.pathname.match(/^\/api\/gateway\/llm\/models\/([^/]+)\/status$/);
     if (statusRoute && req.method === 'POST') {
@@ -590,6 +622,8 @@ const server = http.createServer(async (req, res) => {
             actor: 'gateway-admin',
             reason: typeof payload.reason === 'string' ? payload.reason : undefined,
             supersededBy: typeof payload.supersededBy === 'string' ? payload.supersededBy : undefined,
+            scores: payload.scores && typeof payload.scores === 'object' ? payload.scores : undefined,
+            zdrVerified: payload.zdrVerified === true,
           });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ record }));
@@ -2998,6 +3032,7 @@ server.on('error', (err: any) => {
 async function startServer() {
   const betterAuth = await initializeBetterAuth();
   console.log(`[Lyra Models] Lifecycle registry storage: ${await initModelRegistry()}`);
+  if (startModelSyncSchedule()) console.log('[Lyra Models] Scheduled model sync enabled.');
   if (process.env.LYRA_HOSTED === 'true' && !betterAuth) throw new Error('Hosted Lyra requires Better Auth backed by PostgreSQL.');
   if (eventJournal) {
     await eventJournal.initialize(store);
