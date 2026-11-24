@@ -39,6 +39,56 @@ describe('Unified Canonical Model Catalog & Capacity Router', () => {
     expect(sonnet?.providers).toEqual(['bedrock', 'openrouter']);
   });
 
+  test('listGatewayLlmModels exposes pricing, scores, workflows and legacy aliases for clients', () => {
+    const { models } = listGatewayLlmModels('standard');
+    const sonnet = models.find((m) => m.id === 'claude-sonnet-4-6')!;
+
+    expect(sonnet.primaryProvider).toBe('bedrock');
+    expect(sonnet.pricing?.inputPerMillion).toBeGreaterThan(0);
+    expect(sonnet.pricing?.outputPerMillion).toBeGreaterThanOrEqual(sonnet.pricing!.inputPerMillion);
+    expect(sonnet.aliases).toContain('us.anthropic.claude-sonnet-4-6');
+    expect(sonnet.aliases).toContain('anthropic/claude-sonnet-4.6');
+    expect(Array.isArray(sonnet.workflowGroups)).toBe(true);
+
+    for (const m of models) {
+      for (const score of Object.values(m.scores)) {
+        expect(score).toBeGreaterThanOrEqual(0);
+        expect(score).toBeLessThanOrEqual(100);
+      }
+    }
+    // The fastest model in the catalog defines the top of the speed scale.
+    expect(Math.max(...models.map((m) => m.scores.speed))).toBe(100);
+  });
+
+  test('every alias served to clients resolves back to its canonical model', () => {
+    for (const m of listGatewayLlmModels('standard').models) {
+      for (const alias of m.aliases) {
+        expect(findCanonicalModel(alias)?.id).toBe(m.id);
+      }
+    }
+  });
+
+  test('zdr mode drops contributor-warning models and prices only compliant routes', () => {
+    const standard = listGatewayLlmModels('standard');
+    const zdr = listGatewayLlmModels('zdr');
+    expect(zdr.models.length).toBeLessThanOrEqual(standard.models.length);
+    expect(zdr.models.every((m) => m.zdrCompliant)).toBe(true);
+  });
+
+  test('local-only mode serves an empty catalog', () => {
+    const result = listGatewayLlmModels('local-only');
+    expect(result.models).toEqual([]);
+    expect(result.catalogVersion).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  test('catalogVersion is stable for identical catalogs and changes with privacy mode content', () => {
+    const a = listGatewayLlmModels('standard');
+    const b = listGatewayLlmModels('standard');
+    expect(a.catalogVersion).toBe(b.catalogVersion);
+    expect(a.catalogVersion).toMatch(/^[0-9a-f]{16}$/);
+    expect(a.catalogVersion).not.toBe(listGatewayLlmModels('local-only').catalogVersion);
+  });
+
   test('routes to healthy configured providers and demotes capacity-limited routes', () => {
     process.env.AZURE_FOUNDRY_ENDPOINT = 'https://my-foundry.services.ai.azure.com';
     process.env.AZURE_FOUNDRY_API_KEY = 'foundry-test-key';
