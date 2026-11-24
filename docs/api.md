@@ -26,9 +26,38 @@ Protected routes under `/api/gateway/*` and `/api/ahp/*` accept **either**:
 
 Handled by `server/gatewayLlmProxy.ts`.
 
-### `GET /api/gateway/llm/models?privacyMode=standard|zdr|local-only`
+### `GET /api/gateway/llm/models?privacyMode=standard|zdr|local-only&include=legacy,candidate|all`
 
-Returns the Bedrock model list filtered by `privacyMode`. `local-only` returns an empty remote model list (`[]`).
+Returns the model catalog filtered by `privacyMode`. `local-only` returns an empty list.
+
+Each model has `id`, `name`, `family`, `tier`, `status`, `contextWindow`, `primaryProvider`, `pricing` (per million tokens), `scores` (0-100), `workflowGroups`, `aliases`, `zdrCompliant` and an optional `contributorWarning` / `supersededBy`. The response carries a `catalogVersion` hash, also sent as an `ETag`; send it back as `If-None-Match` to get `304 Not Modified`.
+
+By default only `active` models are listed (the same set `auto` routing uses). Add `include=legacy`, `include=candidate` or `include=all` to also list those states. `retired` models are never listed.
+
+### Model lifecycle
+
+Models move through `candidate` → `active` → `legacy` → `retired`:
+
+| Status | In default list / `auto` | Selectable by id | Searchable |
+|---|---|---|---|
+| `candidate` (newly discovered) | no | yes | yes |
+| `active` | yes | yes | yes |
+| `legacy` (superseded or deprecated) | no | yes | yes |
+| `retired` (removed by the provider) | no | no | no |
+
+Seed models are `active` unless changed. State is stored in `lyra_model_registry` (PostgreSQL in production, `server/data/model-registry.sqlite` locally) with an audit trail in `lyra_model_registry_events`. If storage is unavailable Lyra falls back to in-memory state, where every seed model is active.
+
+### `GET /api/gateway/llm/models/search?q=&include=&limit=`
+
+Searches `active`, `legacy` and `candidate` models (override with `include=legacy,candidate`, which is exact here). Every word in `q` must match the id, name, family or an alias. Results are ordered active first, `limit` defaults to 50 (max 200), and the response includes `total`.
+
+### `POST /api/gateway/llm/models/:id/status` (admin)
+
+Body: `{ "status": "legacy", "reason": "...", "supersededBy": "gpt-5" }`. Requires the gateway API key itself (user session tokens are rejected with `403`). Returns `404` for unknown models, `409` for invalid transitions and `400` for bad input.
+
+### `GET /api/gateway/llm/models/events?modelId=&limit=` (admin)
+
+Lifecycle history, newest first. Requires the gateway API key.
 
 ### `POST /api/gateway/llm/stream`
 

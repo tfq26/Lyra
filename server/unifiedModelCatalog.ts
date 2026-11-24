@@ -13,6 +13,7 @@
 
 import type { CapabilityTier } from './modelDecisionEngine';
 import type { PrivacyMode } from './gatewayLlmProxy';
+import { modelRegistry, type ModelLifecycleStatus } from './modelRegistry';
 
 export type BackendProvider = 'bedrock' | 'foundry' | 'openrouter';
 export type ProviderApiStyle = 'bedrock-converse' | 'openai-chat' | 'anthropic-messages';
@@ -1160,19 +1161,46 @@ export function normalizeCanonicalModelId(modelId: string): string {
   return MODEL_ID_ALIASES[trimmed] || trimmed;
 }
 
-export function findCanonicalModel(modelId: string): CanonicalModelProfile | undefined {
-  const normalized = normalizeCanonicalModelId(modelId);
-  return UNIFIED_MODEL_CATALOG.find((m) => m.id === normalized);
+/** Seed catalog plus runtime-registered models (see `modelRegistry.ts`). Registered entries win on id clashes. */
+export function allCatalogModels(): CanonicalModelProfile[] {
+  const dynamic = modelRegistry.dynamicProfiles();
+  if (dynamic.length === 0) return UNIFIED_MODEL_CATALOG;
+  const dynamicIds = new Set(dynamic.map((m) => m.id));
+  return [...UNIFIED_MODEL_CATALOG.filter((m) => !dynamicIds.has(m.id)), ...dynamic];
 }
 
+/** Lifecycle status of a model: seed models are `active` unless the registry says otherwise. */
+export function getModelLifecycleStatus(modelId: string): ModelLifecycleStatus {
+  return modelRegistry.getStatus(normalizeCanonicalModelId(modelId));
+}
+
+/** Finds a model by id or alias in any lifecycle state, including retired. For admin and audit use. */
+export function findCatalogModelAnyStatus(modelId: string): CanonicalModelProfile | undefined {
+  const normalized = normalizeCanonicalModelId(modelId);
+  return allCatalogModels().find((m) => m.id === normalized);
+}
+
+/** Finds a routable model: any lifecycle state except `retired` (the provider has removed it). */
+export function findCanonicalModel(modelId: string): CanonicalModelProfile | undefined {
+  const found = findCatalogModelAnyStatus(modelId);
+  return found && modelRegistry.getStatus(found.id) !== 'retired' ? found : undefined;
+}
+
+/**
+ * Lists models. By default only `active` models are returned, which is what `auto` routing and the
+ * default client list use; pass `statuses` to include `candidate` or `legacy` models as well.
+ */
 export function listCanonicalModels(options?: {
   privacyMode?: PrivacyMode;
   onlyConfiguredProviders?: boolean;
+  statuses?: readonly ModelLifecycleStatus[];
 }): CanonicalModelProfile[] {
   const privacyMode = options?.privacyMode || 'standard';
   if (privacyMode === 'local-only') return [];
+  const statuses = options?.statuses ?? ['active'];
 
-  return UNIFIED_MODEL_CATALOG.filter((model) =>
+  return allCatalogModels().filter((model) =>
+    statuses.includes(modelRegistry.getStatus(model.id)) &&
     model.routes.some((route) => {
       if (privacyMode === 'zdr' && route.contributorWarning) return false;
       if (options?.onlyConfiguredProviders && !isBackendProviderConfigured(route.provider)) {
