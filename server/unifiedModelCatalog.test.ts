@@ -7,6 +7,7 @@ import {
   normalizeCanonicalModelId,
   resolveProviderRoutes,
   reviewPatchAcrossProviders,
+  UNIFIED_MODEL_CATALOG,
 } from './unifiedModelCatalog';
 import { enforcePrivacyPolicy, listGatewayLlmModels } from './gatewayLlmProxy';
 import { buildExecutionSandboxPolicy, wrapCommandWithMxcSandbox } from './security';
@@ -25,6 +26,28 @@ describe('Unified Canonical Model Catalog & Capacity Router', () => {
     expect(normalizeCanonicalModelId('anthropic/claude-sonnet-4.6')).toBe('claude-sonnet-4-6');
     expect(normalizeCanonicalModelId('us.amazon.nova-2-lite-v1:0')).toBe('nova-2-lite');
     expect(findCanonicalModel('DeepSeek-V4-Pro')?.id).toBe('deepseek-v4-pro');
+  });
+
+  test('every route upstream id resolves back to its own model', () => {
+    for (const model of UNIFIED_MODEL_CATALOG) {
+      for (const route of model.routes) {
+        expect(`${route.upstreamModelId} -> ${findCanonicalModel(route.upstreamModelId)?.id}`).toBe(
+          `${route.upstreamModelId} -> ${model.id}`
+        );
+      }
+    }
+  });
+
+  test('provider-native ids that used to resolve to nothing now route', () => {
+    process.env.AZURE_FOUNDRY_ENDPOINT = 'https://my-foundry.services.ai.azure.com';
+    process.env.AZURE_FOUNDRY_API_KEY = 'foundry-test-key';
+
+    expect(normalizeCanonicalModelId('us.amazon.nova-pro-v1:0')).toBe('nova-2-pro');
+    expect(normalizeCanonicalModelId('MAI-Code-1.1-Flash')).toBe('mai-code-1-1-flash');
+    expect(normalizeCanonicalModelId('MAI-Thinking-1')).toBe('mai-thinking-1');
+
+    expect(resolveProviderRoutes('us.amazon.nova-pro-v1:0', {}).length).toBeGreaterThan(0);
+    expect(resolveProviderRoutes('MAI-Thinking-1', { requireConfigured: true })[0]?.provider).toBe('foundry');
   });
 
   test('listGatewayLlmModels returns deduplicated canonical models with provider list', () => {
