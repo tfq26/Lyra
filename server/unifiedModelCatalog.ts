@@ -979,6 +979,78 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
       { provider: 'bedrock', upstreamModelId: 'openai.gpt-oss-120b-1:0', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.25, outputPerMillion: 1.0 }, supportsPromptCaching: false },
     ],
   },
+  // OpenRouter-only models migrated from Gram's former local registry. Reasoning/coding scores,
+  // pricing and context windows come from that registry; avgTtftMs, tokensPerSecond and
+  // toolProficiency were not tracked there and are estimates (scaled from Gram's speed score and
+  // peer models), so treat them as approximate until measured.
+  {
+    id: 'deepseek-v4.1-flash',
+    name: 'DeepSeek V4.1 Flash',
+    family: 'deepseek',
+    tier: 1,
+    workflowGroups: ['fast-utility', 'triage-routing'],
+    metrics: { reasoningScore: 86, codingScore: 88, toolProficiency: 86, contextWindowTokens: 1_048_576, avgTtftMs: 210, tokensPerSecond: 165 },
+    strengths: ['Lowest input price in the catalog, with a 1M-token context window'],
+    routes: [
+      { provider: 'openrouter', upstreamModelId: 'deepseek/deepseek-v4.1-flash', priority: 1, apiStyle: 'openai-chat', pricing: { inputPerMillion: 0.05, outputPerMillion: 0.3 }, supportsPromptCaching: true },
+    ],
+  },
+  {
+    id: 'qwen3-coder-flash',
+    name: 'Qwen3 Coder Flash',
+    family: 'qwen',
+    tier: 2,
+    workflowGroups: ['coding', 'fast-utility'],
+    metrics: { reasoningScore: 87, codingScore: 90, toolProficiency: 88, contextWindowTokens: 1_000_000, avgTtftMs: 300, tokensPerSecond: 140 },
+    strengths: ['Low-cost code generation with a 1M-token context window'],
+    routes: [
+      { provider: 'openrouter', upstreamModelId: 'qwen/qwen3-coder-flash', priority: 1, apiStyle: 'openai-chat', pricing: { inputPerMillion: 0.195, outputPerMillion: 0.975 }, supportsPromptCaching: true },
+    ],
+  },
+  {
+    id: 'mistral-large-4',
+    name: 'Mistral Large 4',
+    family: 'mistral',
+    tier: 3,
+    workflowGroups: ['research', 'coding'],
+    metrics: { reasoningScore: 92, codingScore: 92, toolProficiency: 90, contextWindowTokens: 256_000, avgTtftMs: 480, tokensPerSecond: 95 },
+    strengths: ['Mistral Large 3-class quality at a quarter of the price'],
+    routes: [
+      { provider: 'openrouter', upstreamModelId: 'mistralai/mistral-large-4-0', priority: 1, apiStyle: 'openai-chat', pricing: { inputPerMillion: 0.5, outputPerMillion: 1.5 }, supportsPromptCaching: false },
+    ],
+  },
+  {
+    id: 'grok-4.20',
+    name: 'Grok 4.20',
+    family: 'xai',
+    tier: 3,
+    workflowGroups: ['world-social', 'research', 'coding'],
+    metrics: { reasoningScore: 93, codingScore: 93, toolProficiency: 90, contextWindowTokens: 256_000, avgTtftMs: 440, tokensPerSecond: 105 },
+    strengths: ['Stronger and cheaper than Grok 4.6 for coding and research'],
+    routes: [
+      { provider: 'openrouter', upstreamModelId: 'x-ai/grok-4.20', priority: 1, apiStyle: 'openai-chat', pricing: { inputPerMillion: 1.25, outputPerMillion: 2.5 }, supportsPromptCaching: true },
+    ],
+  },
+  {
+    id: 'muse-spark-1.3',
+    name: 'Muse Spark 1.3',
+    family: 'meta',
+    tier: 3,
+    workflowGroups: ['long-context', 'coding', 'research'],
+    metrics: { reasoningScore: 94, codingScore: 95, toolProficiency: 90, contextWindowTokens: 1_000_000, avgTtftMs: 450, tokensPerSecond: 105 },
+    strengths: ['1M-token context with frontier-class coding', 'Not ZDR-compliant: excluded in zdr privacy mode'],
+    routes: [
+      {
+        provider: 'openrouter',
+        upstreamModelId: 'meta/muse-spark-1.3',
+        priority: 1,
+        apiStyle: 'openai-chat',
+        pricing: { inputPerMillion: 1.25, outputPerMillion: 4.25 },
+        supportsPromptCaching: true,
+        contributorWarning: 'Avoid Contributor endpoints on private repos; prompts may be used for training.',
+      },
+    ],
+  },
 ];
 
 /**
@@ -1042,6 +1114,11 @@ export const MODEL_ID_ALIASES: Record<string, string> = {
   'DeepSeek-V4-Pro': 'deepseek-v4-pro',
   'qwen.qwen3-coder-480b-a35b-v1:0': 'qwen3-coder-480b',
   'qwen/qwen3-coder': 'qwen3-coder-480b',
+  'deepseek/deepseek-v4.1-flash': 'deepseek-v4.1-flash',
+  'qwen/qwen3-coder-flash': 'qwen3-coder-flash',
+  'mistralai/mistral-large-4-0': 'mistral-large-4',
+  'x-ai/grok-4.20': 'grok-4.20',
+  'meta/muse-spark-1.3': 'muse-spark-1.3',
 };
 
 const routeCooldowns = new Map<string, number>();

@@ -75,6 +75,53 @@ describe('Unified Canonical Model Catalog & Capacity Router', () => {
     expect(zdr.models.every((m) => m.zdrCompliant)).toBe(true);
   });
 
+  describe('OpenRouter models migrated from Gram', () => {
+    const migrated: Array<[legacyId: string, canonicalId: string]> = [
+      ['deepseek/deepseek-v4.1-flash', 'deepseek-v4.1-flash'],
+      ['qwen/qwen3-coder-flash', 'qwen3-coder-flash'],
+      ['mistralai/mistral-large-4-0', 'mistral-large-4'],
+      ['x-ai/grok-4.20', 'grok-4.20'],
+      ['meta/muse-spark-1.3', 'muse-spark-1.3'],
+    ];
+
+    test('Gram legacy ids resolve to the new canonical models', () => {
+      for (const [legacyId, canonicalId] of migrated) {
+        expect(normalizeCanonicalModelId(legacyId)).toBe(canonicalId);
+        expect(findCanonicalModel(legacyId)?.routes.map((r) => r.provider)).toEqual(['openrouter']);
+      }
+    });
+
+    test('routes only resolve when OpenRouter is configured', () => {
+      delete process.env.OPENROUTER_API_KEY;
+      expect(resolveProviderRoutes('grok-4.20', { requireConfigured: true })).toEqual([]);
+
+      process.env.OPENROUTER_API_KEY = 'or-test-key';
+      const routes = resolveProviderRoutes('x-ai/grok-4.20', { requireConfigured: true });
+      expect(routes.map((r) => r.provider)).toEqual(['openrouter']);
+      expect(routes[0]?.upstreamModelId).toBe('x-ai/grok-4.20');
+    });
+
+    test('muse-spark-1.3 is hidden in zdr mode; the other four stay available', () => {
+      const standardIds = listGatewayLlmModels('standard').models.map((m) => m.id);
+      const zdrIds = listGatewayLlmModels('zdr').models.map((m) => m.id);
+      expect(standardIds).toContain('muse-spark-1.3');
+      expect(zdrIds).not.toContain('muse-spark-1.3');
+      for (const id of ['deepseek-v4.1-flash', 'qwen3-coder-flash', 'mistral-large-4', 'grok-4.20']) {
+        expect(zdrIds).toContain(id);
+      }
+      const spark = listGatewayLlmModels('standard').models.find((m) => m.id === 'muse-spark-1.3');
+      expect(spark?.zdrCompliant).toBe(false);
+      expect(spark?.contributorWarning).toContain('Contributor');
+    });
+
+    test('deepseek-v4.1-flash has the lowest input price in the catalog', () => {
+      const byInputPrice = listGatewayLlmModels('standard')
+        .models.slice()
+        .sort((a, b) => (a.pricing?.inputPerMillion ?? Infinity) - (b.pricing?.inputPerMillion ?? Infinity));
+      expect(byInputPrice[0]?.id).toBe('deepseek-v4.1-flash');
+    });
+  });
+
   test('local-only mode serves an empty catalog', () => {
     const result = listGatewayLlmModels('local-only');
     expect(result.models).toEqual([]);
