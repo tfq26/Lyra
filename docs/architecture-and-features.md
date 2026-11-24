@@ -61,6 +61,18 @@ Swarm tasks branch from `HEAD` inside `.lyra/worktrees/run-*` so workers never c
 - `bedrockGuardrails.ts` and `security.ts` redact leaked tokens (`AKIA...`, `ghp_...`, private keys) and block destructive commands before execution.
 - `finopsAnalyzer.ts` enforces per-run and monthly spend limits and computes estimated infra cost deltas.
 
+### 6a. The `auto` selector (`server/autoSelector.ts`)
+
+`model: "auto"` requests pick a model by moving along the cost/quality frontier. Each candidate gets a quality score for the task (coding, reasoning and tool use; reasoning-weighted for algorithmic or security tasks) and an estimated dollar cost from the task's expected tokens and the model's real prices. A model that another model beats on both (cheaper and at least as good) is never chosen. Among the rest, the request's `effort` decides how much quality a doubling of cost has to buy:
+
+| `effort` | Level | Picks |
+|---|---|---|
+| `low` | frugal | the cheapest model that is good enough |
+| `medium` | balanced | the knee of the curve: pay more only while quality still rises quickly |
+| `high` | frontier | the most capable model within 8x of what `medium` would spend |
+
+Quality beyond what the task needs earns only a small credit, so easy tasks stay cheap at every level and the levels diverge as tasks get harder. Speed only breaks ties; models that were just throttled or are failing are skipped. Tunables (`AUTO_LEVELS`) are in code, and `LYRA_AUTO_SELECTOR=legacy` switches back to the previous weighted-score engine. Selection is only as good as the catalog's prices and scores, which is why provider price sync and scored discovery matter.
+
 ### 7. AWS Cloud Offload and Observability
 
 - `server/sqsTaskQueue.ts` offloads payloads larger than 6 KB to S3 (claim-check pattern) and queues Fargate task envelopes in SQS.
