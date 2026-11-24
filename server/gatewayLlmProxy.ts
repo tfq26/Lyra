@@ -8,6 +8,7 @@
  * - Prompt caching (`cachePoint` on Bedrock, `cache_control` on Anthropic/OpenRouter)
  */
 
+import { createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   BedrockRuntimeClient,
@@ -26,8 +27,11 @@ import {
   getFoundryConfig,
   listCanonicalModels,
   markProviderRouteCooldown,
+  MODEL_ID_ALIASES,
   resolveProviderRoutes,
+  UNIFIED_MODEL_CATALOG,
   type BackendProvider,
+  type ProviderRoute,
   type ResolvedProviderRoute,
 } from './unifiedModelCatalog';
 
@@ -233,23 +237,65 @@ function sendSse(res: ServerResponse, payload: Record<string, unknown>): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Highest-priority route (lowest `priority` number); in ZDR mode only routes without a contributor warning count. */
+function pickPrimaryRoute(routes: ProviderRoute[], privacyMode: PrivacyMode): ProviderRoute | undefined {
+  const eligible = privacyMode === 'zdr' ? routes.filter((r) => !r.contributorWarning) : routes;
+  return eligible.slice().sort((a, b) => a.priority - b.priority)[0];
+}
+
+/** Streaming speed on a 0-100 scale, relative to the fastest model in the catalog. */
+function speedScore(tokensPerSecond: number): number {
+  const fastest = Math.max(...UNIFIED_MODEL_CATALOG.map((m) => m.metrics.tokensPerSecond), 1);
+  return Math.max(0, Math.min(100, Math.round((tokensPerSecond / fastest) * 100)));
+}
+
+/**
+ * Model list served to clients (Gram, extensions). Existing fields are stable; pricing, scores,
+ * workflows and legacy-id aliases let clients route locally without bundling their own catalog.
+ * `catalogVersion` is a content hash clients can use as an ETag to skip unchanged refreshes.
+ */
 export function listGatewayLlmModels(privacyMode: PrivacyMode = 'standard') {
   if (privacyMode === 'local-only') {
-    return { privacyMode, models: [] };
+    return { privacyMode, catalogVersion: catalogVersionOf([]), models: [] };
   }
 
-  const models = listCanonicalModels({ privacyMode }).map((m) => ({
-    id: m.id,
-    name: m.name,
-    family: m.family,
-    tier: m.tier,
-    contextWindow: m.metrics.contextWindowTokens,
-    supportsPromptCaching: m.routes.some((r) => r.supportsPromptCaching),
-    zdrCompliant: m.routes.some((r) => !r.contributorWarning),
-    providers: m.routes.map((r) => r.provider),
-  }));
+  const aliasesByModel = new Map<string, string[]>();
+  for (const [alias, canonicalId] of Object.entries(MODEL_ID_ALIASES)) {
+    aliasesByModel.set(canonicalId, [...(aliasesByModel.get(canonicalId) ?? []), alias]);
+  }
 
-  return { privacyMode, models };
+  const models = listCanonicalModels({ privacyMode }).map((m) => {
+    const primary = pickPrimaryRoute(m.routes, privacyMode);
+    return {
+      id: m.id,
+      name: m.name,
+      family: m.family,
+      tier: m.tier,
+      contextWindow: m.metrics.contextWindowTokens,
+      supportsPromptCaching: m.routes.some((r) => r.supportsPromptCaching),
+      zdrCompliant: m.routes.some((r) => !r.contributorWarning),
+      providers: m.routes.map((r) => r.provider),
+      primaryProvider: primary?.provider,
+      pricing: primary
+        ? { inputPerMillion: primary.pricing.inputPerMillion, outputPerMillion: primary.pricing.outputPerMillion }
+        : undefined,
+      scores: {
+        coding: m.metrics.codingScore,
+        reasoning: m.metrics.reasoningScore,
+        toolProficiency: m.metrics.toolProficiency,
+        speed: speedScore(m.metrics.tokensPerSecond),
+      },
+      workflowGroups: m.workflowGroups ?? [],
+      contributorWarning: m.routes.find((r) => r.contributorWarning)?.contributorWarning,
+      aliases: aliasesByModel.get(m.id) ?? [],
+    };
+  });
+
+  return { privacyMode, catalogVersion: catalogVersionOf(models), models };
+}
+
+function catalogVersionOf(models: unknown[]): string {
+  return createHash('sha1').update(JSON.stringify(models)).digest('hex').slice(0, 16);
 }
 
 function isCapacityOrTransientError(err: any, httpStatus?: number): { retryable: boolean; isCapacity: boolean } {

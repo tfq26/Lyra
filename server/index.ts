@@ -517,8 +517,15 @@ const server = http.createServer(async (req, res) => {
     // 3a. Central LLM Gateway: Model Catalog & Streaming Inference Proxy
     if (url.pathname === '/api/gateway/llm/models' && req.method === 'GET') {
       const privacyMode = (url.searchParams.get('privacyMode') as PrivacyMode) || (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(listGatewayLlmModels(privacyMode)));
+      const catalog = listGatewayLlmModels(privacyMode);
+      const etag = `"${catalog.catalogVersion}"`;
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, { ETag: etag });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', ETag: etag });
+      res.end(JSON.stringify(catalog));
       return;
     }
 
