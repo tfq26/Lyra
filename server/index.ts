@@ -46,7 +46,7 @@ import { RunnerPool } from './runnerPool';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
 import { handleGatewayLlmStream, listGatewayLlmModels, parseIncludedStatuses, searchGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
-import { setModelStatus } from './modelLifecycle';
+import { activateModel, setModelStatus } from './modelLifecycle';
 import { ModelSyncBusyError, parseAcceptedPriceChanges, runConfiguredModelSync, startModelSyncSchedule } from './modelSync';
 import { initModelRegistry, isModelLifecycleStatus, ModelRegistryError, modelRegistry } from './modelRegistry';
 import { sharedContextOptimizer } from './contextOptimizer';
@@ -618,15 +618,21 @@ const server = http.createServer(async (req, res) => {
           if (!isModelLifecycleStatus(payload.status)) {
             throw new ModelRegistryError('status must be one of: candidate, active, legacy, retired', 'invalid_input');
           }
-          const record = await setModelStatus(decodeURIComponent(statusRoute[1]!), payload.status, {
+          const change = {
             actor: 'gateway-admin',
             reason: typeof payload.reason === 'string' ? payload.reason : undefined,
             supersededBy: typeof payload.supersededBy === 'string' ? payload.supersededBy : undefined,
             scores: payload.scores && typeof payload.scores === 'object' ? payload.scores : undefined,
             zdrVerified: payload.zdrVerified === true,
-          });
+          };
+          const modelId = decodeURIComponent(statusRoute[1]!);
+          // Activating a model also retires the older versions it replaces, unless told not to.
+          const outcome =
+            payload.status === 'active'
+              ? await activateModel(modelId, { ...change, keepOlderVersions: payload.keepOlderVersions === true })
+              : { record: await setModelStatus(modelId, payload.status, change), superseded: [], kept: [] };
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ record }));
+          res.end(JSON.stringify(outcome));
         } catch (err: any) {
           const known = err instanceof ModelRegistryError;
           const status = !known ? 400 : err.code === 'unknown_model' ? 404 : err.code === 'invalid_transition' ? 409 : 400;

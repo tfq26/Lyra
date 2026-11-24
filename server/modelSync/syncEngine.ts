@@ -14,9 +14,11 @@
  */
 
 import { registerCandidateModel, setModelStatus } from '../modelLifecycle';
+import { findSupersessions, olderVersionsOf } from './successors';
 import { modelRegistry } from '../modelRegistry';
 import {
   allCatalogModels,
+  listCanonicalModels,
   MODEL_ID_ALIASES,
   UNIFIED_MODEL_CATALOG,
   type BackendProvider,
@@ -31,6 +33,7 @@ import {
   type PriceChangeReport,
   type ProviderListing,
   type ProviderSyncReport,
+  type SupersessionReport,
   type SyncOptions,
   type SyncReport,
 } from './types';
@@ -268,7 +271,11 @@ export async function runModelSync(adapters: ModelSourceAdapter[], overrides: Pa
       pricing: planned.listing.pricing,
       createdAt: planned.listing.createdAt,
       registered: false,
+      likelySuccessorOf: olderVersionsOf(planned.profile, catalog)
+        .filter((m) => modelRegistry.getStatus(m.id) !== 'retired')
+        .map((m) => m.id),
     };
+    if (entry.likelySuccessorOf!.length === 0) delete entry.likelySuccessorOf;
     providerReports.get(planned.provider)!.newCandidates.push(entry);
   }
 
@@ -335,11 +342,40 @@ export async function runModelSync(adapters: ModelSourceAdapter[], overrides: Pa
     }
   }
 
+  // 5. Older versions that a newer one replaces leave the default list (still usable and searchable).
+  const supersessions: SupersessionReport[] = [];
+  // Like everything else here, only after at least one provider listing was usable.
+  if (options.supersede && syncedProviders.size > 0) {
+    const active = listCanonicalModels();
+    const found = findSupersessions(active);
+    for (const [index, s] of found.entries()) {
+      const report: SupersessionReport = { ...s, action: options.apply ? 'legacy' : 'would-legacy' };
+      if (index >= options.maxLegacyPerRun) {
+        report.action = 'blocked';
+        report.reason = `cap of ${options.maxLegacyPerRun} per run reached`;
+      } else if (options.apply) {
+        try {
+          await setModelStatus(s.modelId, 'legacy', {
+            actor: options.actor,
+            supersededBy: s.supersededBy,
+            reason: `Replaced by ${s.supersededBy}: at least as capable and not more expensive`,
+          });
+        } catch (err) {
+          report.action = 'blocked';
+          report.reason = err instanceof Error ? err.message : String(err);
+          errors.push(`supersede ${s.modelId}: ${report.reason}`);
+        }
+      }
+      supersessions.push(report);
+    }
+  }
+
   return {
     dryRun: !options.apply,
     startedAt,
     finishedAt: new Date().toISOString(),
     providers: Array.from(providerReports.values()),
+    supersessions,
     errors: [...errors, ...fetched.filter((f) => f.error).map((f) => `${f.adapter.provider}: ${f.error}`)],
   };
 }

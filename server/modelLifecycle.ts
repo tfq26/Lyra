@@ -12,6 +12,7 @@ import {
   type ModelLifecycleStatus,
   type ModelRecordSource,
 } from './modelRegistry';
+import { olderVersionsOf, replaces } from './modelSync/successors';
 import {
   allCatalogModels,
   findCatalogModelAnyStatus,
@@ -80,6 +81,45 @@ export async function setModelStatus(
   }
 
   return modelRegistry.setStatus(model.id, status, { actor: options.actor, reason: options.reason, supersededBy });
+}
+
+export interface ActivationResult {
+  record: ModelLifecycleRecord;
+  /** Older versions moved to `legacy` because this model replaces them. */
+  superseded: Array<{ modelId: string; supersededBy: string }>;
+  /** Older versions left active, with why (the new model is pricier or weaker). */
+  kept: Array<{ modelId: string; reason: string }>;
+}
+
+/**
+ * Activates a model and retires the older versions it replaces from the default list. A newer
+ * version replaces an older one only if it is at least as capable and not more expensive; otherwise
+ * the older model stays active, since it is still the cheaper option.
+ */
+export async function activateModel(
+  modelId: string,
+  options: SetModelStatusOptions & { keepOlderVersions?: boolean }
+): Promise<ActivationResult> {
+  const record = await setModelStatus(modelId, 'active', options);
+  const result: ActivationResult = { record, superseded: [], kept: [] };
+  if (options.keepOlderVersions) return result;
+
+  const model = findCatalogModelAnyStatus(record.modelId);
+  if (!model) return result;
+  const older = olderVersionsOf(model, allCatalogModels()).filter((m) => modelRegistry.getStatus(m.id) === 'active');
+  for (const previous of older) {
+    if (replaces(model, previous)) {
+      await setModelStatus(previous.id, 'legacy', {
+        actor: options.actor,
+        supersededBy: model.id,
+        reason: `Replaced by ${model.id}: at least as capable and not more expensive`,
+      });
+      result.superseded.push({ modelId: previous.id, supersededBy: model.id });
+    } else {
+      result.kept.push({ modelId: previous.id, reason: `${model.id} is pricier or less capable, so ${previous.id} stays active` });
+    }
+  }
+  return result;
 }
 
 function medianTokensPerSecond(): number {

@@ -53,7 +53,8 @@ function adapterFor(models: FakeModel[] | (() => FakeModel[])) {
   });
 }
 
-const base: Partial<SyncOptions> = { now: NOW, minListingSize: 1, apply: true, actor: 'test' };
+// Older-version replacement has its own tests below; the rest of the suite keeps the registry untouched by it.
+const base: Partial<SyncOptions> = { now: NOW, minListingSize: 1, apply: true, actor: 'test', supersede: false };
 
 /** Lists every OpenRouter route Lyra already knows, at its current catalog price, so only the change under test shows up. */
 function currentOpenRouterListing(): FakeModel[] {
