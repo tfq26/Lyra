@@ -159,6 +159,14 @@ export class LyraHarnessGateway {
   /**
    * Timing-safe verification of the Gateway API Key or issued user session token.
    */
+  /** True only for the gateway API key itself, not for user session tokens. Use for admin operations. */
+  public verifyAdminKey(providedKey?: string): boolean {
+    if (!providedKey) return false;
+    const expected = Buffer.from(this.apiKey);
+    const provided = Buffer.from(providedKey);
+    return expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
+  }
+
   public verifyAuth(providedKey?: string): boolean {
     if (!providedKey) return false;
     const session = this.userTokens.get(providedKey);

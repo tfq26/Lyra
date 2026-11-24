@@ -45,7 +45,9 @@ import { userFeedbackService } from './userFeedbackService';
 import { RunnerPool } from './runnerPool';
 import type { WSMessage, RunnerNode } from './types';
 import { assertSafeId, validateWorkingDirectory } from './security';
-import { handleGatewayLlmStream, listGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
+import { handleGatewayLlmStream, listGatewayLlmModels, parseIncludedStatuses, searchGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
+import { setModelStatus } from './modelLifecycle';
+import { initModelRegistry, isModelLifecycleStatus, ModelRegistryError, modelRegistry } from './modelRegistry';
 import { sharedContextOptimizer } from './contextOptimizer';
 
 const PORT = 3001;
@@ -517,7 +519,7 @@ const server = http.createServer(async (req, res) => {
     // 3a. Central LLM Gateway: Model Catalog & Streaming Inference Proxy
     if (url.pathname === '/api/gateway/llm/models' && req.method === 'GET') {
       const privacyMode = (url.searchParams.get('privacyMode') as PrivacyMode) || (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
-      const catalog = listGatewayLlmModels(privacyMode);
+      const catalog = listGatewayLlmModels(privacyMode, { include: parseIncludedStatuses(url.searchParams.get('include')) });
       const etag = `"${catalog.catalogVersion}"`;
       if (req.headers['if-none-match'] === etag) {
         res.writeHead(304, { ETag: etag });
@@ -526,6 +528,78 @@ const server = http.createServer(async (req, res) => {
       }
       res.writeHead(200, { 'Content-Type': 'application/json', ETag: etag });
       res.end(JSON.stringify(catalog));
+      return;
+    }
+
+    // Search across active, legacy and candidate models (retired models are never returned).
+    if (url.pathname === '/api/gateway/llm/models/search' && req.method === 'GET') {
+      const privacyMode = (url.searchParams.get('privacyMode') as PrivacyMode) || (process.env.LYRA_PRIVACY_MODE as PrivacyMode) || 'standard';
+      const include = url.searchParams.get('include');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify(
+          searchGatewayLlmModels({
+            query: url.searchParams.get('q') || '',
+            privacyMode,
+            statuses: include ? parseIncludedStatuses(include, true) : undefined,
+            limit: Number(url.searchParams.get('limit')) || undefined,
+          })
+        )
+      );
+      return;
+    }
+
+    // Admin: lifecycle history. Requires the gateway API key itself, not a user session.
+    if (url.pathname === '/api/gateway/llm/models/events' && req.method === 'GET') {
+      if (!harnessGateway.verifyAdminKey(apiKey)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Gateway API key required.' }));
+        return;
+      }
+      const events = await modelRegistry.listEvents({
+        modelId: url.searchParams.get('modelId') || undefined,
+        limit: Number(url.searchParams.get('limit')) || undefined,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ events }));
+      return;
+    }
+
+    // Admin: change a model's lifecycle status (candidate | active | legacy | retired).
+    const statusRoute = url.pathname.match(/^\/api\/gateway\/llm\/models\/([^/]+)\/status$/);
+    if (statusRoute && req.method === 'POST') {
+      if (!harnessGateway.verifyAdminKey(apiKey)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Gateway API key required.' }));
+        return;
+      }
+      let body = '';
+      let tooLarge = false;
+      req.on('data', (c) => {
+        body += c;
+        if (body.length > 16_384) tooLarge = true;
+      });
+      req.on('end', async () => {
+        try {
+          if (tooLarge) throw new ModelRegistryError('Request body too large', 'invalid_input');
+          const payload = JSON.parse(body || '{}');
+          if (!isModelLifecycleStatus(payload.status)) {
+            throw new ModelRegistryError('status must be one of: candidate, active, legacy, retired', 'invalid_input');
+          }
+          const record = await setModelStatus(decodeURIComponent(statusRoute[1]!), payload.status, {
+            actor: 'gateway-admin',
+            reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+            supersededBy: typeof payload.supersededBy === 'string' ? payload.supersededBy : undefined,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ record }));
+        } catch (err: any) {
+          const known = err instanceof ModelRegistryError;
+          const status = !known ? 400 : err.code === 'unknown_model' ? 404 : err.code === 'invalid_transition' ? 409 : 400;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Could not update model status.' }));
+        }
+      });
       return;
     }
 
@@ -2923,6 +2997,7 @@ server.on('error', (err: any) => {
 
 async function startServer() {
   const betterAuth = await initializeBetterAuth();
+  console.log(`[Lyra Models] Lifecycle registry storage: ${await initModelRegistry()}`);
   if (process.env.LYRA_HOSTED === 'true' && !betterAuth) throw new Error('Hosted Lyra requires Better Auth backed by PostgreSQL.');
   if (eventJournal) {
     await eventJournal.initialize(store);

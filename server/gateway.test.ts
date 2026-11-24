@@ -35,6 +35,21 @@ describe('Lyra Secure API Gateway & Harness Integration', () => {
       expect(gateway.verifyAuth('')).toBe(false);
       expect(gateway.verifyAuth(undefined)).toBe(false);
     });
+
+    it('verifyAdminKey accepts only the gateway API key, not user session tokens', () => {
+      (gateway as any).userTokens.set('lyra-pat-user-session', {
+        email: 'user@example.com',
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      });
+
+      expect(gateway.verifyAuth('lyra-pat-user-session')).toBe(true);
+      expect(gateway.verifyAdminKey('lyra-pat-user-session')).toBe(false);
+      expect(gateway.verifyAdminKey(apiKey)).toBe(true);
+      expect(gateway.verifyAdminKey('wrong-key')).toBe(false);
+      expect(gateway.verifyAdminKey('')).toBe(false);
+      expect(gateway.verifyAdminKey(undefined)).toBe(false);
+    });
   });
 
   describe('Rate Limiter', () => {

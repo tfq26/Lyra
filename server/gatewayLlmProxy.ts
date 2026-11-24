@@ -22,15 +22,17 @@ import { BEDROCK_CATALOG, ModelDecisionEngine, type ModelProfile } from './model
 import { sharedContextOptimizer } from './contextOptimizer';
 import { cloudWatchTelemetry } from './cloudwatchEmf';
 import { redactSecretText } from './security';
+import { modelRegistry, type ModelLifecycleStatus } from './modelRegistry';
 import {
   buildFoundryOpenAiBaseUrl,
   getFoundryConfig,
+  allCatalogModels,
   listCanonicalModels,
   markProviderRouteCooldown,
   MODEL_ID_ALIASES,
   resolveProviderRoutes,
-  UNIFIED_MODEL_CATALOG,
   type BackendProvider,
+  type CanonicalModelProfile,
   type ProviderRoute,
   type ResolvedProviderRoute,
 } from './unifiedModelCatalog';
@@ -245,53 +247,121 @@ function pickPrimaryRoute(routes: ProviderRoute[], privacyMode: PrivacyMode): Pr
 
 /** Streaming speed on a 0-100 scale, relative to the fastest model in the catalog. */
 function speedScore(tokensPerSecond: number): number {
-  const fastest = Math.max(...UNIFIED_MODEL_CATALOG.map((m) => m.metrics.tokensPerSecond), 1);
+  const fastest = Math.max(...allCatalogModels().map((m) => m.metrics.tokensPerSecond), 1);
   return Math.max(0, Math.min(100, Math.round((tokensPerSecond / fastest) * 100)));
+}
+
+function aliasesByModelId(): Map<string, string[]> {
+  const aliasesByModel = new Map<string, string[]>();
+  for (const [alias, canonicalId] of Object.entries(MODEL_ID_ALIASES)) {
+    aliasesByModel.set(canonicalId, [...(aliasesByModel.get(canonicalId) ?? []), alias]);
+  }
+  return aliasesByModel;
+}
+
+function toGatewayModel(m: CanonicalModelProfile, privacyMode: PrivacyMode, aliasesByModel: Map<string, string[]>) {
+  const primary = pickPrimaryRoute(m.routes, privacyMode);
+  const record = modelRegistry.getRecord(m.id);
+  return {
+    id: m.id,
+    name: m.name,
+    family: m.family,
+    tier: m.tier,
+    status: modelRegistry.getStatus(m.id),
+    supersededBy: record?.supersededBy,
+    contextWindow: m.metrics.contextWindowTokens,
+    supportsPromptCaching: m.routes.some((r) => r.supportsPromptCaching),
+    zdrCompliant: m.routes.some((r) => !r.contributorWarning),
+    providers: m.routes.map((r) => r.provider),
+    primaryProvider: primary?.provider,
+    pricing: primary
+      ? { inputPerMillion: primary.pricing.inputPerMillion, outputPerMillion: primary.pricing.outputPerMillion }
+      : undefined,
+    scores: {
+      coding: m.metrics.codingScore,
+      reasoning: m.metrics.reasoningScore,
+      toolProficiency: m.metrics.toolProficiency,
+      speed: speedScore(m.metrics.tokensPerSecond),
+    },
+    workflowGroups: m.workflowGroups ?? [],
+    contributorWarning: m.routes.find((r) => r.contributorWarning)?.contributorWarning,
+    aliases: aliasesByModel.get(m.id) ?? [],
+  };
 }
 
 /**
  * Model list served to clients (Gram, extensions). Existing fields are stable; pricing, scores,
  * workflows and legacy-id aliases let clients route locally without bundling their own catalog.
  * `catalogVersion` is a content hash clients can use as an ETag to skip unchanged refreshes.
+ *
+ * By default only `active` models are listed. Pass `include` to add `candidate` or `legacy` models.
  */
-export function listGatewayLlmModels(privacyMode: PrivacyMode = 'standard') {
+export function listGatewayLlmModels(
+  privacyMode: PrivacyMode = 'standard',
+  options?: { include?: readonly ModelLifecycleStatus[] }
+) {
   if (privacyMode === 'local-only') {
     return { privacyMode, catalogVersion: catalogVersionOf([]), models: [] };
   }
 
-  const aliasesByModel = new Map<string, string[]>();
-  for (const [alias, canonicalId] of Object.entries(MODEL_ID_ALIASES)) {
-    aliasesByModel.set(canonicalId, [...(aliasesByModel.get(canonicalId) ?? []), alias]);
-  }
-
-  const models = listCanonicalModels({ privacyMode }).map((m) => {
-    const primary = pickPrimaryRoute(m.routes, privacyMode);
-    return {
-      id: m.id,
-      name: m.name,
-      family: m.family,
-      tier: m.tier,
-      contextWindow: m.metrics.contextWindowTokens,
-      supportsPromptCaching: m.routes.some((r) => r.supportsPromptCaching),
-      zdrCompliant: m.routes.some((r) => !r.contributorWarning),
-      providers: m.routes.map((r) => r.provider),
-      primaryProvider: primary?.provider,
-      pricing: primary
-        ? { inputPerMillion: primary.pricing.inputPerMillion, outputPerMillion: primary.pricing.outputPerMillion }
-        : undefined,
-      scores: {
-        coding: m.metrics.codingScore,
-        reasoning: m.metrics.reasoningScore,
-        toolProficiency: m.metrics.toolProficiency,
-        speed: speedScore(m.metrics.tokensPerSecond),
-      },
-      workflowGroups: m.workflowGroups ?? [],
-      contributorWarning: m.routes.find((r) => r.contributorWarning)?.contributorWarning,
-      aliases: aliasesByModel.get(m.id) ?? [],
-    };
-  });
+  const aliasesByModel = aliasesByModelId();
+  const models = listCanonicalModels({ privacyMode, statuses: options?.include }).map((m) =>
+    toGatewayModel(m, privacyMode, aliasesByModel)
+  );
 
   return { privacyMode, catalogVersion: catalogVersionOf(models), models };
+}
+
+/**
+ * Parses the `include` query parameter ("legacy", "candidate", "legacy,candidate" or "all") into
+ * the statuses to list. `retired` models are never exposed. Returns undefined when nothing valid
+ * was requested, which means the default (`active` only for lists).
+ */
+export function parseIncludedStatuses(raw: string | null | undefined, exact = false): ModelLifecycleStatus[] | undefined {
+  const tokens = String(raw ?? '')
+    .toLowerCase()
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return undefined;
+  if (tokens.includes('all')) return ['active', 'legacy', 'candidate'];
+  const wanted = tokens.filter((t): t is ModelLifecycleStatus => t === 'active' || t === 'legacy' || t === 'candidate');
+  if (wanted.length === 0) return undefined;
+  return exact ? wanted : Array.from(new Set<ModelLifecycleStatus>(['active', ...wanted]));
+}
+
+const STATUS_ORDER: Record<ModelLifecycleStatus, number> = { active: 0, legacy: 1, candidate: 2, retired: 3 };
+
+/**
+ * Searches the catalog, including `legacy` and `candidate` models that the default list hides.
+ * `retired` models (removed by the provider) are never returned. Matches every query word against
+ * the id, name, family and aliases.
+ */
+export function searchGatewayLlmModels(options: {
+  query?: string;
+  privacyMode?: PrivacyMode;
+  statuses?: readonly ModelLifecycleStatus[];
+  limit?: number;
+}) {
+  const privacyMode = options.privacyMode ?? 'standard';
+  const limit = Math.min(Math.max(Math.floor(options.limit ?? 50), 1), 200);
+  const query = (options.query ?? '').trim().slice(0, 100);
+  if (privacyMode === 'local-only') return { privacyMode, query, total: 0, models: [] };
+
+  const statuses = (options.statuses ?? ['active', 'legacy', 'candidate']).filter((s) => s !== 'retired');
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const aliasesByModel = aliasesByModelId();
+
+  const matches = listCanonicalModels({ privacyMode, statuses })
+    .map((m) => toGatewayModel(m, privacyMode, aliasesByModel))
+    .filter((m) => {
+      if (words.length === 0) return true;
+      const haystack = `${m.id} ${m.name} ${m.family} ${m.aliases.join(' ')}`.toLowerCase();
+      return words.every((w) => haystack.includes(w));
+    })
+    .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.name.localeCompare(b.name));
+
+  return { privacyMode, query, total: matches.length, models: matches.slice(0, limit) };
 }
 
 function catalogVersionOf(models: unknown[]): string {
