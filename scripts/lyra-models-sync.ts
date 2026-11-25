@@ -8,7 +8,8 @@
  *   bun scripts/lyra-models-sync.ts --accept-prices=gpt-6.2-sol:openrouter,grok-4.20:openrouter
  *   bun scripts/lyra-models-sync.ts --max-new=10 --window-days=30
  *
- * Providers come from LYRA_MODEL_SYNC_PROVIDERS (default: openrouter). Storage follows the server:
+ * Providers: --providers=openrouter,bedrock,foundry, else LYRA_MODEL_SYNC_PROVIDERS (default: openrouter).
+ * Bedrock and Foundry only track prices; OpenRouter also discovers and retires models. Storage follows the server:
  * PostgreSQL when configured, otherwise server/data/model-registry.sqlite.
  */
 
@@ -33,7 +34,8 @@ async function main() {
   if (flag('window-days')) options.discoveryWindowDays = Number(flag('window-days'));
 
   const storage = await initModelRegistry();
-  const { adapters, unsupported } = getConfiguredAdapters();
+  const providerFlag = flag('providers');
+  const { adapters, unsupported } = getConfiguredAdapters(process.env, providerFlag ? providerFlag.split(',') : undefined);
   console.log(`Model sync (${apply ? 'APPLY' : 'dry run'}), registry storage: ${storage}, providers: ${adapters.map((a) => a.provider).join(', ') || 'none'}`);
   for (const name of unsupported) console.log(`  ! No sync adapter for "${name}" yet; skipped.`);
 
