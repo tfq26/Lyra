@@ -45,7 +45,8 @@ async function main() {
 
     console.log(`\nNew candidates (${p.newCandidates.length}):`);
     for (const c of p.newCandidates) {
-      console.log(`  + ${c.id.padEnd(34)} ${c.pricing ? price(c.pricing) : 'n/a'}  ${c.upstreamModelId}${c.error ? `  ERROR: ${c.error}` : ''}`);
+      const successor = c.likelySuccessorOf?.length ? `  (newer version of ${c.likelySuccessorOf.join(', ')})` : '';
+      console.log(`  + ${c.id.padEnd(34)} ${c.pricing ? price(c.pricing) : 'n/a'}  ${c.upstreamModelId}${successor}${c.error ? `  ERROR: ${c.error}` : ''}`);
     }
     const skipped = Object.entries(p.skipped).sort((a, b) => b[1] - a[1]);
     if (skipped.length) console.log(`  (not added: ${skipped.map(([r, n]) => `${r} ${n}`).join(', ')})`);
@@ -68,6 +69,11 @@ async function main() {
       for (const e of p.expiring) console.log(`  ${e.action.padEnd(12)} ${e.modelId} on ${e.expiresAt.slice(0, 10)}`);
     }
     if (p.reappeared.length) console.log(`\nRetired models listed again (not reinstated automatically): ${p.reappeared.join(', ')}`);
+  }
+
+  if (report.supersessions.length) {
+    console.log(`\nOlder versions replaced by a newer, at-least-as-good, not-pricier model (${report.supersessions.length}):`);
+    for (const s of report.supersessions) console.log(`  ${s.action.padEnd(12)} ${s.modelId} -> ${s.supersededBy}${s.reason ? ` - ${s.reason}` : ''}`);
   }
 
   if (report.errors.length) console.log(`\nErrors:\n${report.errors.map((e) => `  - ${e}`).join('\n')}`);

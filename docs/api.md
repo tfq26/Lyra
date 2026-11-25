@@ -57,6 +57,8 @@ Body: `{ "status": "legacy", "reason": "...", "supersededBy": "gpt-5" }`. Requir
 
 Models discovered by sync are **unscored** (`scored: false`, `scores: null`) and cannot be activated without scores. To promote one, add `"scores": { "coding": 88, "reasoning": 84, "toolProficiency": 86, "tokensPerSecond": 120 }` (the first three are required, 0-100). Add `"zdrVerified": true` to clear the "zero-data-retention not verified" warning, otherwise the model stays out of `zdr` mode. Sending `scores` with `"status": "candidate"` records the scores without activating.
 
+Activating a model (`"status": "active"`) also retires the older versions it replaces, and the response lists them: `{ "record": {...}, "superseded": [{"modelId": "gpt-6.2-astra", "supersededBy": "gpt-6.3-astra"}], "kept": [...] }`. A model replaces an older version of the same line (same family and series, higher version number: `gpt-6.2-astra` -> `gpt-6.3-astra`; `-pro`/`-flash` style suffixes are separate lines) only if it is at least as capable and not more expensive. A better but pricier version leaves the older one active, listed under `kept`. Send `"keepOlderVersions": true` to skip this.
+
 ### `POST /api/gateway/llm/models/sync` (admin)
 
 Discovers new models and syncs prices and removals from providers (`LYRA_MODEL_SYNC_PROVIDERS`, default `openrouter`). **Dry run unless `"apply": true`.** Body (all optional): `{ "apply": false, "acceptPriceChanges": "all" | ["grok-4.20:openrouter"], "maxNewModels": 25 }`. Returns a report per provider: `newCandidates`, `skipped` (reason counts), `priceChanges` (`applied`, `would-apply`, `held`, `cleared`), `missing`, `expiring` and `reappeared`. Returns `409` if a sync is already running.
@@ -67,6 +69,7 @@ What a sync does, per provider listing:
 - **Prices** are stored as per-provider overrides; the catalog's other fields are untouched. Changes over 50% are *held* until accepted; differences under 1% are ignored.
 - **Missing models** are retired after 2 consecutive syncs without them, only when every provider serving the model was synced, at most 5 per run.
 - **Announced removals** (a provider expiration date within 14 days) move an active model to `legacy`.
+- **Newer versions** replace older ones: an active model is moved to `legacy` (with `supersededBy`) when a newer version in the same line is at least as capable and not pricier, at most 10 per run. A new candidate that looks like a newer version is reported with `likelySuccessorOf`. Disable with `supersede: false`.
 - A failed download, or a listing under 20 models, changes nothing.
 
 The same sync runs from the CLI (`bun run models:sync`, `--apply`, `--accept-prices=...`) and optionally on a schedule (`LYRA_MODEL_SYNC_INTERVAL_HOURS`, off by default). Only OpenRouter has an adapter today; Bedrock and Foundry need their own.

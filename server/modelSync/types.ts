@@ -60,6 +60,9 @@ export interface SyncOptions {
   acceptPriceChanges: 'all' | string[];
   /** Models the provider says will be removed within this many days become `legacy`. */
   expiryWarningDays: number;
+  /** Move models to `legacy` when a newer version in the same line replaces them. */
+  supersede: boolean;
+  maxLegacyPerRun: number;
   now?: Date;
 }
 
@@ -74,6 +77,8 @@ export const DEFAULT_SYNC_OPTIONS: SyncOptions = {
   maxPriceChangePct: 50,
   acceptPriceChanges: [],
   expiryWarningDays: 14,
+  supersede: true,
+  maxLegacyPerRun: 10,
 };
 
 export type PriceChangeStatus = 'applied' | 'would-apply' | 'held' | 'cleared' | 'would-clear';
@@ -109,6 +114,15 @@ export interface NewCandidateReport {
   createdAt?: string;
   registered: boolean;
   error?: string;
+  /** Existing models this looks like a newer version of (same family and series, lower version). */
+  likelySuccessorOf?: string[];
+}
+
+export interface SupersessionReport {
+  modelId: string;
+  supersededBy: string;
+  action: 'legacy' | 'would-legacy' | 'blocked';
+  reason?: string;
 }
 
 export interface ProviderSyncReport {
@@ -133,5 +147,7 @@ export interface SyncReport {
   startedAt: string;
   finishedAt: string;
   providers: ProviderSyncReport[];
+  /** Active models that a newer, at-least-as-good and not pricier version replaces. */
+  supersessions: SupersessionReport[];
   errors: string[];
 }
