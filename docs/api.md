@@ -76,7 +76,7 @@ The same sync runs from the CLI (`bun run models:sync`, `--apply`, `--accept-pri
 
 ### `GET /api/gateway/llm/models/events?modelId=&limit=` (admin)
 
-Lifecycle history, newest first. Requires the gateway API key.
+Lifecycle history, newest first, plus `storage`: `{ backend: 'postgres' | 'sqlite' | 'memory', error? }`. A `memory` backend means durable storage could not be opened (`error` says why) and lifecycle changes are lost on restart. The sync response carries the same `storage` field. Requires the gateway API key.
 
 ### `POST /api/gateway/llm/stream`
 

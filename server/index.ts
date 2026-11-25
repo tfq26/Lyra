@@ -48,7 +48,7 @@ import { assertSafeId, validateWorkingDirectory } from './security';
 import { handleGatewayLlmStream, listGatewayLlmModels, parseIncludedStatuses, searchGatewayLlmModels, type PrivacyMode } from './gatewayLlmProxy';
 import { activateModel, setModelStatus } from './modelLifecycle';
 import { ModelSyncBusyError, parseAcceptedPriceChanges, runConfiguredModelSync, startModelSyncSchedule } from './modelSync';
-import { initModelRegistry, isModelLifecycleStatus, ModelRegistryError, modelRegistry } from './modelRegistry';
+import { getRegistryStorage, initModelRegistry, isModelLifecycleStatus, ModelRegistryError, modelRegistry } from './modelRegistry';
 import { sharedContextOptimizer } from './contextOptimizer';
 
 const PORT = 3001;
@@ -562,7 +562,7 @@ const server = http.createServer(async (req, res) => {
         limit: Number(url.searchParams.get('limit')) || undefined,
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ events }));
+      res.end(JSON.stringify({ events, storage: getRegistryStorage() }));
       return;
     }
 
@@ -588,7 +588,7 @@ const server = http.createServer(async (req, res) => {
             maxNewModels: Number.isFinite(maxNew) && maxNew >= 0 ? Math.min(maxNew, 100) : undefined,
           });
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(report));
+          res.end(JSON.stringify({ ...report, storage: getRegistryStorage() }));
         } catch (err: any) {
           res.writeHead(err instanceof ModelSyncBusyError ? 409 : 400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err?.message || 'Model sync failed.' }));
