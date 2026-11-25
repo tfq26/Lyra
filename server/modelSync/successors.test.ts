@@ -232,7 +232,8 @@ describe('older versions leave the default list (registry integration)', () => {
   });
 
   describe('activating a scored candidate', () => {
-    const candidate = (id: string) => ({ ...profile(id, { family: 'anthropic', input: 3, output: 15, quality: 0 }), unscored: true as const });
+    // Priced at claude-sonnet-5-5's list price ($2/$10) so it counts as "not pricier" than the older versions.
+    const candidate = (id: string) => ({ ...profile(id, { family: 'anthropic', input: 2, output: 10, quality: 0 }), unscored: true as const });
 
     test('retires the older version when the new one is as good and not pricier', async () => {
       await registerCandidateModel(candidate('claude-sonnet-6-0'), { actor: 'sync' });
