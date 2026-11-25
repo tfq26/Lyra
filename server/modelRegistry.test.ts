@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   canTransition,
+  getRegistryStorage,
   initModelRegistry,
   InMemoryModelRegistryStore,
   ModelRegistry,
@@ -209,6 +210,7 @@ describe('ModelRegistry', () => {
       pinEnv(path.join(dir, 'registry.sqlite'));
 
       expect(await initModelRegistry()).toBe('sqlite');
+      expect(getRegistryStorage()).toEqual({ backend: 'sqlite' });
       await modelRegistry.setStatus('gpt-4o', 'legacy', { actor: 'test' });
       expect(fs.existsSync(path.join(dir, 'registry.sqlite'))).toBe(true);
     });
@@ -222,6 +224,9 @@ describe('ModelRegistry', () => {
 
       expect(await initModelRegistry()).toBe('memory');
       expect(modelRegistry.getStatus('gpt-4o')).toBe('active');
+      const status = getRegistryStorage();
+      expect(status.backend).toBe('memory');
+      expect(status.error).toBeTruthy(); // says why, so operators can tell a silent fallback from a choice
     });
   });
 

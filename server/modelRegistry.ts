@@ -599,7 +599,23 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
  * a local SQLite file. If storage cannot be opened the registry stays in memory, which means every
  * seed model is active (the pre-registry behavior) rather than failing the server.
  */
-export async function initModelRegistry(): Promise<'postgres' | 'sqlite' | 'memory'> {
+export type RegistryBackend = 'postgres' | 'sqlite' | 'memory';
+
+export interface RegistryStorageStatus {
+  backend: RegistryBackend;
+  /** Why durable storage was not used, when the registry fell back to memory. */
+  error?: string;
+}
+
+let storageStatus: RegistryStorageStatus = { backend: 'memory' };
+
+/** Which store the registry is using. Lets operators confirm a deploy reached Postgres. */
+export function getRegistryStorage(): RegistryStorageStatus {
+  return { ...storageStatus };
+}
+
+export async function initModelRegistry(): Promise<RegistryBackend> {
+  storageStatus = { backend: 'memory' };
   try {
     const pg = resolvePostgresConfig();
     if (pg) {
@@ -614,12 +630,15 @@ export async function initModelRegistry(): Promise<'postgres' | 'sqlite' | 'memo
         })
       );
       startRefresh();
+      storageStatus = { backend: 'postgres' };
       return 'postgres';
     }
     const dbPath = process.env.LYRA_MODEL_REGISTRY_PATH || path.resolve('server/data/model-registry.sqlite');
     await modelRegistry.useStore(new SqliteModelRegistryStore(dbPath));
+    storageStatus = { backend: 'sqlite' };
     return 'sqlite';
   } catch (err) {
+    storageStatus = { backend: 'memory', error: (err instanceof Error ? err.message : String(err)).slice(0, 200) };
     console.warn('[Lyra Models] Registry storage unavailable, using in-memory lifecycle state:', err instanceof Error ? err.message : String(err));
     return 'memory';
   }
