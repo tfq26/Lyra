@@ -33,6 +33,35 @@ export function parseModelVersion(id: string): ParsedModelId | null {
   return { series: words.join('-'), version };
 }
 
+/** The version segments of an id exactly as written ("4.20" -> ["4", "20"]), keeping leading and trailing digits. */
+function rawVersionParts(id: string): string[] {
+  const parts: string[] = [];
+  for (const token of id.toLowerCase().split('-').filter(Boolean)) {
+    const match = VERSION_TOKEN.exec(token);
+    if (match) parts.push(...match[1]!.split('.'));
+  }
+  return parts;
+}
+
+/**
+ * True when two ids' order cannot be told from the numbers alone: at the first segment that differs,
+ * one is longer and ends in zero ("4.20" vs "4.7"). That may be version 4.20 or a spelling of 4.2, and
+ * guessing wrong would hide a newer model behind an older one, so such pairs are never ordered.
+ */
+export function isAmbiguousOrder(idA: string, idB: string): boolean {
+  const a = rawVersionParts(idA);
+  const b = rawVersionParts(idB);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? '0';
+    const y = b[i] ?? '0';
+    if (Number(x) === Number(y)) continue;
+    if (i === 0 || x.length === y.length) return false;
+    const longer = x.length > y.length ? x : y;
+    return longer.endsWith('0');
+  }
+  return false;
+}
+
 export function compareVersions(a: number[], b: number[]): number {
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const diff = (a[i] ?? 0) - (b[i] ?? 0);
@@ -72,7 +101,7 @@ export function olderVersionsOf(model: CanonicalModelProfile, catalog: Canonical
   const mine = parseModelVersion(model.id);
   if (!mine) return [];
   return catalog
-    .filter((other) => other.id !== model.id && sameLine(model, other))
+    .filter((other) => other.id !== model.id && sameLine(model, other) && !isAmbiguousOrder(model.id, other.id))
     .filter((other) => compareVersions(parseModelVersion(other.id)!.version, mine.version) < 0)
     .sort((a, b) => compareVersions(parseModelVersion(b.id)!.version, parseModelVersion(a.id)!.version));
 }
@@ -93,7 +122,7 @@ export function findSupersessions(active: CanonicalModelProfile[]): Supersession
     const parsed = parseModelVersion(older.id);
     if (!parsed) continue;
     const newer = active
-      .filter((m) => m.id !== older.id && sameLine(older, m) && compareVersions(parseModelVersion(m.id)!.version, parsed.version) > 0)
+      .filter((m) => m.id !== older.id && sameLine(older, m) && !isAmbiguousOrder(older.id, m.id) && compareVersions(parseModelVersion(m.id)!.version, parsed.version) > 0)
       .sort((a, b) => compareVersions(parseModelVersion(b.id)!.version, parseModelVersion(a.id)!.version))
       .find((m) => replaces(m, older));
     if (newer) result.push({ modelId: older.id, supersededBy: newer.id });

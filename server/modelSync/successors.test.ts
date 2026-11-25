@@ -4,7 +4,7 @@ import { activateModel, registerCandidateModel, setModelStatus } from '../modelL
 import { modelRegistry } from '../modelRegistry';
 import { findCanonicalModel, getModelLifecycleStatus, listCanonicalModels, type CanonicalModelProfile } from '../unifiedModelCatalog';
 import { createOpenRouterAdapter, runModelSync, type SyncOptions } from './index';
-import { compareVersions, findSupersessions, olderVersionsOf, parseModelVersion, priceOf, qualityOf, replaces } from './successors';
+import { compareVersions, findSupersessions, isAmbiguousOrder, olderVersionsOf, parseModelVersion, priceOf, qualityOf, replaces } from './successors';
 
 function profile(id: string, opts: { family?: CanonicalModelProfile['family']; input?: number; output?: number; quality?: number; unscored?: boolean } = {}): CanonicalModelProfile {
   const q = opts.quality ?? 90;
@@ -88,6 +88,29 @@ describe('replaces', () => {
   test('exposes the scores it compares', () => {
     expect(qualityOf(older)).toBeCloseTo(98);
     expect(priceOf(older)).toBeCloseTo(4.5);
+  });
+});
+
+describe('ambiguous version order', () => {
+  test('flags a longer segment ending in zero against a shorter one', () => {
+    expect(isAmbiguousOrder('grok-4.7', 'grok-4.20')).toBe(true);
+    expect(isAmbiguousOrder('grok-4.20', 'grok-4.6')).toBe(true);
+  });
+
+  test('leaves ordinary versions alone', () => {
+    expect(isAmbiguousOrder('gpt-6.2-astra', 'gpt-6.3-astra')).toBe(false);
+    expect(isAmbiguousOrder('grok-4.12', 'grok-4.9')).toBe(false);
+    expect(isAmbiguousOrder('claude-sonnet-4-6', 'claude-sonnet-5-5')).toBe(false);
+    expect(isAmbiguousOrder('grok-4.20', 'grok-4.30')).toBe(false);
+  });
+
+  test('never supersedes either way when the order is ambiguous', () => {
+    const catalog = [
+      profile('grok-4.7', { family: 'xai', quality: 85 }),
+      profile('grok-4.20', { family: 'xai', quality: 95, input: 0.5, output: 2 }),
+    ];
+    expect(findSupersessions(catalog)).toEqual([]);
+    expect(olderVersionsOf(catalog[1]!, catalog)).toEqual([]);
   });
 });
 
