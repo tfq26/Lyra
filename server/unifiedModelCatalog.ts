@@ -249,7 +249,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
         upstreamModelId: 'us.anthropic.claude-mythos-5-2-v1:0',
         priority: 1,
         apiStyle: 'bedrock-converse',
-        pricing: { inputPerMillion: 5.0, outputPerMillion: 25.0 },
+        pricing: { inputPerMillion: 8.0, outputPerMillion: 40.0 },
         supportsPromptCaching: true,
       },
       {
@@ -282,7 +282,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
         upstreamModelId: 'us.anthropic.claude-fable-5-2-v1:0',
         priority: 1,
         apiStyle: 'bedrock-converse',
-        pricing: { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+        pricing: { inputPerMillion: 8.0, outputPerMillion: 40.0 },
         supportsPromptCaching: true,
       },
       {
@@ -315,7 +315,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
         upstreamModelId: 'gpt-6.2-astra',
         priority: 1,
         apiStyle: 'openai-chat',
-        pricing: { inputPerMillion: 2.0, outputPerMillion: 12.0 },
+        pricing: { inputPerMillion: 8.0, outputPerMillion: 40.0 },
         supportsPromptCaching: true,
       },
       {
@@ -348,7 +348,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
         upstreamModelId: 'gpt-6.2-sol',
         priority: 1,
         apiStyle: 'openai-chat',
-        pricing: { inputPerMillion: 0.4, outputPerMillion: 1.6 },
+        pricing: { inputPerMillion: 2.0, outputPerMillion: 10.0 },
         supportsPromptCaching: true,
       },
       {
@@ -711,7 +711,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 100, codingScore: 99, toolProficiency: 98, contextWindowTokens: 200_000, avgTtftMs: 780, tokensPerSecond: 60 },
     strengths: ['Frontier architecture & complex debugging', 'Deep multi-step planning'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.anthropic.claude-opus-5-5', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 15.0, outputPerMillion: 75.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.anthropic.claude-opus-5-5', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 4.0, outputPerMillion: 20.0 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -723,7 +723,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 97, codingScore: 98, toolProficiency: 98, contextWindowTokens: 200_000, avgTtftMs: 490, tokensPerSecond: 92 },
     strengths: ['Surgical multi-file refactoring', 'Strict tool-calling discipline'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.anthropic.claude-sonnet-5-5', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 3.0, outputPerMillion: 15.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.anthropic.claude-sonnet-5-5', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 2.0, outputPerMillion: 10.0 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -735,7 +735,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 85, codingScore: 89, toolProficiency: 90, contextWindowTokens: 200_000, avgTtftMs: 210, tokensPerSecond: 165 },
     strengths: ['Fast tool execution & Q&A', 'Low-cost sub-agent worker'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.anthropic.claude-haiku-5-5', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.8, outputPerMillion: 4.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.anthropic.claude-haiku-5-5', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.1, outputPerMillion: 0.5 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -747,7 +747,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 97, codingScore: 98, toolProficiency: 96, contextWindowTokens: 400_000, avgTtftMs: 510, tokensPerSecond: 92 },
     strengths: ['Deep research & synthesis', 'High-accuracy code edits'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-6.1-sol', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 3.5, outputPerMillion: 14.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-6.1-sol', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 2.0, outputPerMillion: 10.0 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -759,7 +759,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 93, codingScore: 94, toolProficiency: 94, contextWindowTokens: 1_000_000, avgTtftMs: 420, tokensPerSecond: 105 },
     strengths: ['1M-token context window', 'Balanced research & coding'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-6.1-terra', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 1.5, outputPerMillion: 6.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-6.1-terra', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 1.0, outputPerMillion: 5.0 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -771,7 +771,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 86, codingScore: 88, toolProficiency: 89, contextWindowTokens: 256_000, avgTtftMs: 220, tokensPerSecond: 160 },
     strengths: ['Fast, low-cost OpenAI tier', 'Quick patches & chat'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-6-luna', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.25, outputPerMillion: 1.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-6-luna', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.1, outputPerMillion: 0.5 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -796,8 +796,8 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 91, codingScore: 91, toolProficiency: 91, contextWindowTokens: 1_000_000, avgTtftMs: 390, tokensPerSecond: 112 },
     strengths: ['1M context on Bedrock & Foundry', 'Long-document synthesis'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-5.6-terra', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 1.25, outputPerMillion: 5.0 }, supportsPromptCaching: true },
-      { provider: 'foundry', upstreamModelId: 'gpt-5.6-terra', priority: 2, apiStyle: 'openai-chat', pricing: { inputPerMillion: 1.25, outputPerMillion: 5.0 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-5.6-terra', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 2.0, outputPerMillion: 12.0 }, supportsPromptCaching: true },
+      { provider: 'foundry', upstreamModelId: 'gpt-5.6-terra', priority: 2, apiStyle: 'openai-chat', pricing: { inputPerMillion: 2.0, outputPerMillion: 12.0 }, supportsPromptCaching: true },
     ],
   },
   {
@@ -809,8 +809,8 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
     metrics: { reasoningScore: 84, codingScore: 86, toolProficiency: 87, contextWindowTokens: 256_000, avgTtftMs: 200, tokensPerSecond: 170 },
     strengths: ['Fast, low-cost Bedrock & Foundry utility model'],
     routes: [
-      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-5.6-luna', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.2, outputPerMillion: 0.8 }, supportsPromptCaching: true },
-      { provider: 'foundry', upstreamModelId: 'gpt-5.6-luna', priority: 2, apiStyle: 'openai-chat', pricing: { inputPerMillion: 0.2, outputPerMillion: 0.8 }, supportsPromptCaching: true },
+      { provider: 'bedrock', upstreamModelId: 'us.openai.gpt-5.6-luna', priority: 1, apiStyle: 'bedrock-converse', pricing: { inputPerMillion: 0.2, outputPerMillion: 1.2 }, supportsPromptCaching: true },
+      { provider: 'foundry', upstreamModelId: 'gpt-5.6-luna', priority: 2, apiStyle: 'openai-chat', pricing: { inputPerMillion: 0.2, outputPerMillion: 1.2 }, supportsPromptCaching: true },
     ],
   },
   {
