@@ -19,6 +19,7 @@ import {
   type Tool,
 } from '@aws-sdk/client-bedrock-runtime';
 import { BEDROCK_CATALOG, ModelDecisionEngine, type ModelProfile } from './modelDecisionEngine';
+import { decideAutoModel } from './autoSelector';
 import { sharedContextOptimizer } from './contextOptimizer';
 import { cloudWatchTelemetry } from './cloudwatchEmf';
 import { redactSecretText } from './security';
@@ -530,7 +531,7 @@ export async function handleGatewayLlmStream(
       });
     } else if (isAuto) {
       const autoCatalog = buildConfiguredAutoCatalog();
-      const decision = ModelDecisionEngine.decideOptimalModel(
+      const decision = decideAutoModel(
         {
           prompt: extractLastUserPrompt(),
           lane: body.mode === 'chat' ? 'ask' : 'fast-patch',

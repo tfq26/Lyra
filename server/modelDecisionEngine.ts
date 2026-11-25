@@ -326,7 +326,7 @@ export const BEDROCK_CATALOG: ModelProfile[] = [
   },
 ];
 
-const THROTTLE_COOLDOWN_MS = 60_000;
+export const THROTTLE_COOLDOWN_MS = 60_000;
 const accessDeniedModels = new Set<string>();
 
 export class ModelDecisionEngine {
