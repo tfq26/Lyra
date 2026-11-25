@@ -13,6 +13,7 @@ import {
   type ModelRecordSource,
 } from './modelRegistry';
 import {
+  allCatalogModels,
   findCatalogModelAnyStatus,
   normalizeCanonicalModelId,
   type BackendProvider,
@@ -28,10 +29,23 @@ const FAMILIES = [
   'kimi', 'glm', 'xai', 'mistral', 'minimax', 'nvidia', 'cohere',
 ] as const;
 
+export interface ModelScores {
+  coding: number;
+  reasoning: number;
+  toolProficiency: number;
+  /** Optional; defaults to the catalog median so an unmeasured model is not ranked as slowest or fastest. */
+  tokensPerSecond?: number;
+  avgTtftMs?: number;
+}
+
 export interface SetModelStatusOptions {
   actor: string;
   reason?: string;
   supersededBy?: string;
+  /** Required to activate a discovered model, whose quality has not been measured yet. */
+  scores?: ModelScores;
+  /** Clears the "zero-data-retention not verified" warning on a discovered model. */
+  zdrVerified?: boolean;
 }
 
 /** Changes a model's lifecycle status, validating that the model (and its successor) exist. */
@@ -51,7 +65,48 @@ export async function setModelStatus(
     supersededBy = successor.id;
   }
 
+  const current = modelRegistry.getStatus(model.id);
+  if (model.unscored) {
+    if (status === 'active' && !options.scores) {
+      throw new ModelRegistryError('This discovered model has not been scored. Provide scores to activate it.', 'invalid_input');
+    }
+    if (options.scores) {
+      await modelRegistry.updateProfile(model.id, applyScores(model, options.scores, options.zdrVerified), {
+        actor: options.actor,
+        reason: 'Scored by a reviewer',
+      });
+      if (status === current) return modelRegistry.getRecord(model.id)!;
+    }
+  }
+
   return modelRegistry.setStatus(model.id, status, { actor: options.actor, reason: options.reason, supersededBy });
+}
+
+function medianTokensPerSecond(): number {
+  const speeds = allCatalogModels()
+    .filter((m) => !m.unscored)
+    .map((m) => m.metrics.tokensPerSecond)
+    .sort((a, b) => a - b);
+  return speeds.length > 0 ? speeds[Math.floor(speeds.length / 2)]! : 100;
+}
+
+/** Returns the profile with measured scores filled in and the `unscored` flag cleared. */
+function applyScores(model: CanonicalModelProfile, scores: ModelScores, zdrVerified?: boolean): CanonicalModelProfile {
+  const { unscored: _unscored, ...rest } = model;
+  return {
+    ...rest,
+    metrics: {
+      ...model.metrics,
+      codingScore: finiteInRange(scores.coding, 0, 100, 'coding score'),
+      reasoningScore: finiteInRange(scores.reasoning, 0, 100, 'reasoning score'),
+      toolProficiency: finiteInRange(scores.toolProficiency, 0, 100, 'toolProficiency score'),
+      tokensPerSecond:
+        scores.tokensPerSecond === undefined ? medianTokensPerSecond() : finiteInRange(scores.tokensPerSecond, 1, 100_000, 'tokensPerSecond'),
+      avgTtftMs: scores.avgTtftMs === undefined ? model.metrics.avgTtftMs || 500 : finiteInRange(scores.avgTtftMs, 0, 600_000, 'avgTtftMs'),
+    },
+    strengths: model.strengths.filter((s) => !s.includes('not yet scored')),
+    routes: zdrVerified ? model.routes.map(({ contributorWarning: _warning, ...route }) => route) : model.routes,
+  };
 }
 
 export interface RegisterCandidateOptions {
@@ -141,5 +196,6 @@ export function validateCandidateProfile(input: CanonicalModelProfile): Canonica
     },
     strengths: (input.strengths ?? []).slice(0, 5).map((s) => cleanText(s, 200) ?? '').filter(Boolean),
     routes,
+    ...(input.unscored ? { unscored: true } : {}),
   };
 }

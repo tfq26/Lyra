@@ -225,6 +225,75 @@ describe('ModelRegistry', () => {
     });
   });
 
+  describe('price overrides and sync bookkeeping', () => {
+    test('are stored per provider, survive a restart, and can be cleared', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lyra-registry-'));
+      tmpDirs.push(dir);
+      const file = path.join(dir, 'registry.sqlite');
+
+      const first = new ModelRegistry();
+      await first.useStore(new SqliteModelRegistryStore(file));
+      const versionBefore = first.version;
+      await first.setPriceOverride('grok-4.20', 'openrouter', { inputPerMillion: 2, outputPerMillion: 4 }, { actor: 'sync', source: 'openrouter-sync', reason: 'price moved' });
+      expect(first.version).toBeGreaterThan(versionBefore);
+
+      const second = new ModelRegistry();
+      await second.useStore(new SqliteModelRegistryStore(file));
+      expect(second.getRecord('grok-4.20')?.priceOverrides?.openrouter).toMatchObject({ inputPerMillion: 2, outputPerMillion: 4, source: 'openrouter-sync' });
+      expect((await second.listEvents({ modelId: 'grok-4.20' }))[0]).toMatchObject({ action: 'price', reason: 'price moved' });
+
+      await second.setPriceOverride('grok-4.20', 'openrouter', null, { actor: 'sync' });
+      expect(second.getRecord('grok-4.20')?.priceOverrides).toBeUndefined();
+    });
+
+    test('miss counters are saved without an audit event and survive a status change', async () => {
+      const registry = new ModelRegistry();
+      await registry.useStore(new InMemoryModelRegistryStore());
+
+      await registry.recordSightings('grok-4.20', { missedSyncs: { openrouter: 1 } });
+      expect(registry.getRecord('grok-4.20')?.missedSyncs).toEqual({ openrouter: 1 });
+      expect(await registry.listEvents({ modelId: 'grok-4.20' })).toEqual([]);
+
+      await registry.setPriceOverride('grok-4.20', 'openrouter', { inputPerMillion: 2, outputPerMillion: 4 }, { actor: 'sync' });
+      await registry.setStatus('grok-4.20', 'legacy', { actor: 'a' });
+      const record = registry.getRecord('grok-4.20')!;
+      expect(record.missedSyncs).toEqual({ openrouter: 1 });
+      expect(record.priceOverrides?.openrouter?.inputPerMillion).toBe(2);
+    });
+
+    test('updateProfile only works for models the registry holds a profile for', async () => {
+      const registry = new ModelRegistry();
+      await registry.useStore(new InMemoryModelRegistryStore());
+      await expect(registry.updateProfile('gpt-4o', profile('gpt-4o'), { actor: 'a' })).rejects.toMatchObject({ code: 'unknown_model' });
+
+      await registry.addCandidate(profile('fresh-model'), { actor: 'sync' });
+      const updated = await registry.updateProfile('fresh-model', { ...profile('fresh-model'), name: 'Renamed' }, { actor: 'reviewer', reason: 'scored' });
+      expect(updated.profile?.name).toBe('Renamed');
+      expect((await registry.listEvents({ modelId: 'fresh-model' }))[0]).toMatchObject({ action: 'profile', actor: 'reviewer' });
+    });
+
+    test('a registry database created before these columns existed is upgraded in place', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lyra-registry-'));
+      tmpDirs.push(dir);
+      const file = path.join(dir, 'old.sqlite');
+
+      const { Database } = await import('bun:sqlite');
+      const old = new Database(file);
+      old.run(`CREATE TABLE lyra_model_registry (
+        model_id TEXT PRIMARY KEY, status TEXT NOT NULL, reason TEXT, superseded_by TEXT, source TEXT NOT NULL,
+        status_changed_at TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT, updated_by TEXT NOT NULL, profile TEXT)`);
+      old.run(`INSERT INTO lyra_model_registry (model_id, status, source, status_changed_at, first_seen_at, updated_by)
+        VALUES ('gpt-4o', 'legacy', 'seed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'someone')`);
+      old.close();
+
+      const registry = new ModelRegistry();
+      await registry.useStore(new SqliteModelRegistryStore(file));
+      expect(registry.getStatus('gpt-4o')).toBe('legacy');
+      await registry.setPriceOverride('gpt-4o', 'openrouter', { inputPerMillion: 1, outputPerMillion: 2 }, { actor: 'sync' });
+      expect(registry.getRecord('gpt-4o')?.priceOverrides?.openrouter?.outputPerMillion).toBe(2);
+    });
+  });
+
   test('errors carry a machine-readable code', async () => {
     const registry = new ModelRegistry();
     await registry.useStore(new InMemoryModelRegistryStore());

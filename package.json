@@ -8,6 +8,7 @@
     "doctor": "bun scripts/lyra-doctor.ts",
     "dispatch": "bun scripts/lyra-dispatch.ts",
     "sync": "bun scripts/lyra-sync.ts",
+    "models:sync": "bun scripts/lyra-models-sync.ts",
     "horizon:scout": "bun scripts/lyra-horizon-scout.ts",
     "scout:frontier": "bun scripts/scout-frontier.ts",
     "nightshift": "bun scripts/lyra-nightshift.ts",
