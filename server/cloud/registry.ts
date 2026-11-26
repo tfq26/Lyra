@@ -30,7 +30,7 @@ function buildProvider(id: CloudProviderId): CloudProviderBundle {
  * Resolves the active cloud provider bundle from env vars, supporting both a single
  * primary provider (`LYRA_CLOUD_PROVIDER`) and per-capability hybrid overrides
  * (`LYRA_QUEUE_PROVIDER`, `LYRA_PUBSUB_PROVIDER`, `LYRA_SANDBOX_PROVIDER`,
- * `LYRA_STORAGE_PROVIDER`, `LYRA_SECRETS_PROVIDER`).
+ * `LYRA_STORAGE_PROVIDER`, `LYRA_SECRETS_PROVIDER`, `LYRA_DATABASE_PROVIDER`).
  */
 export function createCloudProviderFromEnv(
   env: Record<string, string | undefined> = process.env
@@ -52,6 +52,7 @@ export function createCloudProviderFromEnv(
   const sandbox = get(normalizeProvider(env.LYRA_SANDBOX_PROVIDER || primaryId)).sandbox;
   const storage = get(normalizeProvider(env.LYRA_STORAGE_PROVIDER || primaryId)).storage;
   const secrets = get(normalizeProvider(env.LYRA_SECRETS_PROVIDER || primaryId)).secrets;
+  const database = get(normalizeProvider(env.LYRA_DATABASE_PROVIDER || primaryId)).database;
 
   return {
     id: primary.id,
@@ -61,6 +62,7 @@ export function createCloudProviderFromEnv(
     sandbox,
     storage,
     secrets,
+    database,
     async healthCheck() {
       const checks = await Promise.all(
         Array.from(cache.values()).map((provider) => provider.healthCheck())

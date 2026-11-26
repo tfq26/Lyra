@@ -51,6 +51,7 @@ describe('Cloud provider abstraction & hybrid registry', () => {
       LYRA_STORAGE_PROVIDER: 'cloudflare',
       LYRA_QUEUE_PROVIDER: 'azure',
       LYRA_SANDBOX_PROVIDER: 'aws',
+      LYRA_DATABASE_PROVIDER: 'cloudflare',
     });
 
     expect(hybrid.id).toBe('local');
@@ -58,5 +59,22 @@ describe('Cloud provider abstraction & hybrid registry', () => {
     expect(hybrid.storage.provider).toBe('cloudflare');
     expect(hybrid.queue.provider).toBe('azure');
     expect(hybrid.sandbox.provider).toBe('aws');
+    expect(hybrid.database.provider).toBe('cloudflare');
+    expect(hybrid.database.engine).toBe('sqlite');
+  });
+
+  test('LocalCloudProvider database supports initialization, queries, and branching', async () => {
+    const local = new LocalCloudProvider();
+    await local.database.initialize();
+    const tables = await local.database.query<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lyra_scratchpad'`
+    );
+    expect(tables.length).toBe(1);
+
+    const branch = await local.database.createBranch!('run-test-1');
+    expect(branch.engine).toBe('sqlite');
+    expect(branch.connectionInfo).toBeTruthy();
+    await local.database.deleteBranch!('run-test-1');
+    await local.database.close();
   });
 });

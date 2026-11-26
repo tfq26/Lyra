@@ -57,3 +57,6 @@ server/data/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Local BYOK key for the Gram companion
+.gram/

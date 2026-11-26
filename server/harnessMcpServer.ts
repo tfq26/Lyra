@@ -13,6 +13,9 @@ import { BedrockGuardrailService } from './bedrockGuardrails';
 import { AHPServer } from './ahpProtocol';
 import { modelCouncil } from './modelCouncil';
 import { nightShiftRunner } from './nightShift/nightShiftRunner';
+import { createCloudProviderFromEnv } from './cloud/registry';
+import type { CloudProviderBundle } from './cloud/interfaces';
+import { LyraCodeMode } from './codeMode';
 
 export interface McpToolDefinition {
   name: string;
@@ -24,9 +27,15 @@ export class LyraHarnessMcpServer {
   private previewDeployer = new PreviewDeployer();
   private guardrailService = new BedrockGuardrailService();
   private ahpServer: AHPServer;
+  private codeMode: LyraCodeMode;
 
-  constructor(private gateway: LyraHarnessGateway, private store: UnifiedStore) {
+  constructor(
+    private gateway: LyraHarnessGateway,
+    private store: UnifiedStore,
+    cloud: CloudProviderBundle = createCloudProviderFromEnv()
+  ) {
     this.ahpServer = new AHPServer(store, { gateway });
+    this.codeMode = new LyraCodeMode(cloud, gateway, store);
   }
 
   public getTools(): McpToolDefinition[] {
@@ -333,6 +342,45 @@ export class LyraHarnessMcpServer {
             },
           },
           required: ['errorLog'],
+        },
+      },
+      {
+        name: 'lyra_search',
+        description: 'Code Mode discovery: return typed TypeScript SDK declarations for lyra.* namespaces (db, storage, swarm, council, nightshift).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Optional keyword filter (e.g. "db", "storage", "swarm", "branch").',
+            },
+          },
+        },
+      },
+      {
+        name: 'lyra_execute',
+        description: 'Code Mode execution: run an async JS/TS script inside an isolated sandbox with the typed lyra.* RPC SDK.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            script: {
+              type: 'string',
+              description: 'Async JavaScript/TypeScript body using `lyra.*` and `return ...`.',
+            },
+            tenantId: {
+              type: 'string',
+              description: 'Optional tenant scope (defaults to "default").',
+            },
+            workspacePath: {
+              type: 'string',
+              description: 'Optional workspace path context.',
+            },
+            timeoutMs: {
+              type: 'number',
+              description: 'Execution timeout in milliseconds (default 5000, max 30000).',
+            },
+          },
+          required: ['script'],
         },
       },
     ];
@@ -667,6 +715,30 @@ export class LyraHarnessMcpServer {
               appliedPatches: report.appliedPatches,
               proofTicket: report.proofMarkdown,
             }, null, 2),
+          }],
+        };
+      }
+
+      case 'lyra_search': {
+        const res = this.codeMode.search(args.query);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify(res, null, 2),
+          }],
+        };
+      }
+
+      case 'lyra_execute': {
+        const res = await this.codeMode.execute(String(args.script || ''), {
+          tenantId: args.tenantId,
+          workspacePath: args.workspacePath,
+          timeoutMs: args.timeoutMs,
+        });
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify(res, null, 2),
           }],
         };
       }

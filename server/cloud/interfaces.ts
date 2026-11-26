@@ -89,6 +89,25 @@ export interface CloudSecretAdapter {
   getSecret(name: string): Promise<string | undefined>;
 }
 
+export interface DbBranchHandle {
+  branchId: string;
+  provider: CloudProviderId;
+  engine: 'sqlite' | 'postgres';
+  connectionInfo?: string;
+}
+
+export interface CloudDatabaseAdapter {
+  readonly provider: CloudProviderId;
+  readonly engine: 'sqlite' | 'postgres';
+  initialize(): Promise<void>;
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
+  execute(sql: string, params?: unknown[]): Promise<{ changes: number }>;
+  createBranch?(branchId: string): Promise<DbBranchHandle>;
+  deleteBranch?(branchId: string): Promise<void>;
+  healthCheck(): Promise<CloudHealthStatus>;
+  close(): Promise<void>;
+}
+
 export interface CloudProviderBundle {
   readonly id: CloudProviderId;
   readonly name: string;
@@ -97,5 +116,6 @@ export interface CloudProviderBundle {
   readonly sandbox: CloudSandboxAdapter;
   readonly storage: CloudBlobStorageAdapter;
   readonly secrets: CloudSecretAdapter;
+  readonly database: CloudDatabaseAdapter;
   healthCheck(): Promise<CloudHealthStatus[]>;
 }

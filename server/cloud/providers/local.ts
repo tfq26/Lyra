@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import type {
   CloudBlobStorageAdapter,
+  CloudDatabaseAdapter,
   CloudHealthStatus,
   CloudProviderBundle,
   CloudPubSubAdapter,
@@ -15,6 +16,7 @@ import type {
   SandboxHandle,
   SandboxLaunchRequest,
 } from '../interfaces';
+import { SqliteCloudDatabaseAdapter } from '../database';
 
 class LocalMemoryQueueAdapter implements CloudQueueAdapter {
   public readonly provider = 'local' as const;
@@ -164,16 +166,21 @@ export class LocalCloudProvider implements CloudProviderBundle {
   public readonly sandbox: CloudSandboxAdapter;
   public readonly storage: CloudBlobStorageAdapter;
   public readonly secrets: CloudSecretAdapter;
+  public readonly database: CloudDatabaseAdapter;
 
-  constructor(options?: { blobDir?: string }) {
+  constructor(options?: { blobDir?: string; dbPath?: string }) {
     this.queue = new LocalMemoryQueueAdapter();
     this.pubsub = new LocalPubSubAdapter();
     this.sandbox = new LocalSandboxAdapter();
     this.storage = new LocalBlobStorageAdapter(options?.blobDir);
     this.secrets = new LocalEnvSecretAdapter();
+    this.database = new SqliteCloudDatabaseAdapter('local', options?.dbPath);
   }
 
   async healthCheck(): Promise<CloudHealthStatus[]> {
-    return [{ provider: 'local', ok: true, details: { mode: 'self-hosted' } }];
+    return [
+      { provider: 'local', ok: true, details: { mode: 'self-hosted' } },
+      await this.database.healthCheck(),
+    ];
   }
 }

@@ -1,5 +1,12 @@
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import type {
   CloudBlobStorageAdapter,
+  CloudDatabaseAdapter,
   CloudHealthStatus,
   CloudProviderBundle,
   CloudPubSubAdapter,
@@ -10,6 +17,7 @@ import type {
   SandboxHandle,
   SandboxLaunchRequest,
 } from '../interfaces';
+import { PostgresCloudDatabaseAdapter } from '../database';
 
 export interface AwsCloudConfig {
   region: string;
@@ -68,19 +76,53 @@ export class AwsCloudProvider implements CloudProviderBundle {
     stop: async () => {},
   };
 
+  private s3Client?: S3Client;
+
+  private getS3(): { client: S3Client; bucket: string } {
+    const bucket = this.config.s3Bucket;
+    if (!bucket) {
+      throw new Error('AwsCloudProvider.storage requires LYRA_AWS_S3_BUCKET to be configured.');
+    }
+    this.s3Client ||= new S3Client({ region: this.config.region });
+    return { client: this.s3Client, bucket };
+  }
+
   public readonly storage: CloudBlobStorageAdapter = {
     provider: 'aws',
-    putObject: async () => {
-      throw new Error('AwsCloudProvider.storage.putObject: wire @aws-sdk/client-s3 with LYRA_AWS_S3_BUCKET.');
+    putObject: async (key, body, contentType) => {
+      const { client, bucket } = this.getS3();
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: typeof body === 'string' ? Buffer.from(body, 'utf8') : body,
+          ContentType: contentType || 'application/octet-stream',
+        })
+      );
     },
-    getObject: async () => null,
-    deleteObject: async () => {},
+    getObject: async (key) => {
+      const { client, bucket } = this.getS3();
+      try {
+        const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        if (!res.Body) return null;
+        return await res.Body.transformToByteArray();
+      } catch (err: any) {
+        if (err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404) return null;
+        throw err;
+      }
+    },
+    deleteObject: async (key) => {
+      const { client, bucket } = this.getS3();
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    },
   };
 
   public readonly secrets: CloudSecretAdapter = {
     provider: 'aws',
     getSecret: async (name: string) => process.env[name],
   };
+
+  public readonly database: CloudDatabaseAdapter = new PostgresCloudDatabaseAdapter('aws');
 
   async healthCheck(): Promise<CloudHealthStatus[]> {
     return [

@@ -1,5 +1,6 @@
 import type {
   CloudBlobStorageAdapter,
+  CloudDatabaseAdapter,
   CloudHealthStatus,
   CloudProviderBundle,
   CloudPubSubAdapter,
@@ -10,6 +11,7 @@ import type {
   SandboxHandle,
   SandboxLaunchRequest,
 } from '../interfaces';
+import { PostgresCloudDatabaseAdapter } from '../database';
 
 export interface AzureCloudConfig {
   tenantId?: string;
@@ -85,6 +87,8 @@ export class AzureCloudProvider implements CloudProviderBundle {
     provider: 'azure',
     getSecret: async (name: string) => process.env[name],
   };
+
+  public readonly database: CloudDatabaseAdapter = new PostgresCloudDatabaseAdapter('azure');
 
   async healthCheck(): Promise<CloudHealthStatus[]> {
     return [

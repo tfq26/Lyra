@@ -27,9 +27,9 @@ describe('Lyra Harness MCP Server', () => {
     }
   });
 
-  it('exposes the 15 standardized MCP harness tools', () => {
+  it('exposes the 17 standardized MCP harness tools (including Code Mode)', () => {
     const tools = mcpServer.getTools();
-    expect(tools.length).toBe(15);
+    expect(tools.length).toBe(17);
     const names = tools.map((t) => t.name);
     expect(names).toContain('lyra_dispatch_task');
     expect(names).toContain('lyra_get_run_status');
@@ -46,6 +46,26 @@ describe('Lyra Harness MCP Server', () => {
     expect(names).toContain('lyra_council_analyze');
     expect(names).toContain('lyra_sync_session');
     expect(names).toContain('lyra_nightshift_investigate');
+    expect(names).toContain('lyra_search');
+    expect(names).toContain('lyra_execute');
+  });
+
+  it('executes lyra_search and lyra_execute Code Mode tools via MCP', async () => {
+    const searchRes = await mcpServer.executeTool('lyra_search', { query: 'db' });
+    const parsedSearch = JSON.parse(searchRes.content[0]!.text);
+    expect(parsedSearch.namespaces).toContain('lyra.db');
+
+    const execRes = await mcpServer.executeTool('lyra_execute', {
+      tenantId: 'mcp-tenant',
+      script: `
+        await lyra.db.scratchpadSet('ns1', 'k1', { ok: true });
+        const val = await lyra.db.scratchpadGet('ns1', 'k1');
+        return JSON.parse(val);
+      `,
+    });
+    const parsedExec = JSON.parse(execRes.content[0]!.text);
+    expect(parsedExec.success).toBe(true);
+    expect(parsedExec.returnValue).toEqual({ ok: true });
   });
 
   it('executes QA sandbox and conflict resolution tools', async () => {
