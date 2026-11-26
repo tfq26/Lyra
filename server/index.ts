@@ -581,12 +581,16 @@ const server = http.createServer(async (req, res) => {
         try {
           const payload = JSON.parse(body || '{}');
           const maxNew = Number(payload.maxNewModels);
-          const report = await runConfiguredModelSync({
-            apply: payload.apply === true,
-            actor: 'gateway-admin',
-            acceptPriceChanges: parseAcceptedPriceChanges(payload.acceptPriceChanges),
-            maxNewModels: Number.isFinite(maxNew) && maxNew >= 0 ? Math.min(maxNew, 100) : undefined,
-          });
+          const providers = Array.isArray(payload.providers) ? payload.providers.map((p: unknown) => String(p).toLowerCase()).slice(0, 8) : undefined;
+          const report = await runConfiguredModelSync(
+            {
+              apply: payload.apply === true,
+              actor: 'gateway-admin',
+              acceptPriceChanges: parseAcceptedPriceChanges(payload.acceptPriceChanges),
+              maxNewModels: Number.isFinite(maxNew) && maxNew >= 0 ? Math.min(maxNew, 100) : undefined,
+            },
+            providers
+          );
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ...report, storage: getRegistryStorage() }));
         } catch (err: any) {

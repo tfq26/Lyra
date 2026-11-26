@@ -83,8 +83,14 @@ export async function runModelSync(adapters: ModelSourceAdapter[], overrides: Pa
     adapters.map(async (adapter): Promise<FetchedProvider> => {
       try {
         const listing = await adapter.fetchListing();
-        if (listing.length < options.minListingSize) {
-          return { adapter, listing, aborted: `listing has only ${listing.length} models (minimum ${options.minListingSize}); ignored as unreliable` };
+        if (adapter.pricesOnly ? listing.length === 0 : listing.length < options.minListingSize) {
+          return {
+            adapter,
+            listing,
+            aborted: adapter.pricesOnly
+              ? 'no route in the catalog matched a price; ignored'
+              : `listing has only ${listing.length} models (minimum ${options.minListingSize}); ignored as unreliable`,
+          };
         }
         return { adapter, listing };
       } catch (err) {
@@ -93,7 +99,9 @@ export async function runModelSync(adapters: ModelSourceAdapter[], overrides: Pa
     })
   );
 
-  const syncedProviders = new Set<BackendProvider>(fetched.filter((f) => f.listing && !f.aborted).map((f) => f.adapter.provider));
+  // Price-only sources never vouch that a model still exists, so they do not count as "synced" for removals.
+  const syncedProviders = new Set<BackendProvider>(fetched.filter((f) => f.listing && !f.aborted && !f.adapter.pricesOnly).map((f) => f.adapter.provider));
+  const pricesOnlyProviders = new Set<BackendProvider>(fetched.filter((f) => f.adapter.pricesOnly).map((f) => f.adapter.provider));
   const catalog = allCatalogModels();
   const providerReports = new Map<BackendProvider, ProviderSyncReport>();
   const listingIndex = new Map<BackendProvider, Map<string, ProviderListing>>();
@@ -124,7 +132,7 @@ export async function runModelSync(adapters: ModelSourceAdapter[], overrides: Pa
 
   for (const f of fetched) {
     const report = providerReports.get(f.adapter.provider)!;
-    if (!f.listing || f.aborted) continue;
+    if (!f.listing || f.aborted || f.adapter.pricesOnly) continue;
 
     const knownUpstream = new Set(catalog.flatMap((m) => m.routes.filter((r) => r.provider === f.adapter.provider).map((r) => r.upstreamModelId)));
     const skip = (reason: string) => (report.skipped[reason] = (report.skipped[reason] ?? 0) + 1);
@@ -173,18 +181,21 @@ export async function runModelSync(adapters: ModelSourceAdapter[], overrides: Pa
     for (const route of model.routes) {
       const index = listingIndex.get(route.provider);
       if (!index) continue; // provider not synced this run: leave its counter alone
-      touched = true;
+      const pricesOnly = pricesOnlyProviders.has(route.provider);
+      if (!pricesOnly) touched = true;
       const report = providerReports.get(route.provider)!;
       const listed = index.get(route.upstreamModelId);
 
       if (!listed) {
-        nextMisses[route.provider] = (previousMisses[route.provider] ?? 0) + 1;
+        if (!pricesOnly) nextMisses[route.provider] = (previousMisses[route.provider] ?? 0) + 1;
         continue;
       }
-      seenAnywhere = true;
-      delete nextMisses[route.provider];
+      if (!pricesOnly) {
+        seenAnywhere = true;
+        delete nextMisses[route.provider];
+      }
       if (status === 'retired') {
-        report.reappeared.push(model.id);
+        if (!pricesOnly) report.reappeared.push(model.id);
         continue;
       }
 

@@ -37,6 +37,12 @@ export interface DiscoveryContext {
  */
 export interface ModelSourceAdapter {
   readonly provider: BackendProvider;
+  /**
+   * True for adapters that only know prices (Bedrock, Foundry). Their listing covers the routes Lyra
+   * already has, so the engine uses it for price changes only: no new models, no "missing" counters,
+   * no removals, no expiry.
+   */
+  readonly pricesOnly?: boolean;
   fetchListing(options?: { signal?: AbortSignal }): Promise<ProviderListing[]>;
   /** Builds a candidate profile for a listing Lyra does not know yet, or says why it is skipped. */
   toCandidate(listing: ProviderListing, context: DiscoveryContext): CanonicalModelProfile | { skip: string };

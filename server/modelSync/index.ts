@@ -1,19 +1,25 @@
+import { createBedrockPriceAdapter } from './bedrockPriceAdapter';
+import { createFoundryPriceAdapter } from './foundryPriceAdapter';
 import { createOpenRouterAdapter } from './openRouterAdapter';
 import { runModelSync } from './syncEngine';
 import type { ModelSourceAdapter, SyncOptions, SyncReport } from './types';
 
 export * from './types';
 export { createOpenRouterAdapter, parseOpenRouterListing } from './openRouterAdapter';
+export { createBedrockPriceAdapter } from './bedrockPriceAdapter';
+export { createFoundryPriceAdapter } from './foundryPriceAdapter';
 export { runModelSync } from './syncEngine';
 
-/** Providers with a sync adapter today. Bedrock and Foundry plug in here once their adapters exist. */
+/** Providers with a sync adapter. OpenRouter discovers models and prices; Bedrock and Foundry track prices only. */
 const ADAPTER_FACTORIES: Record<string, () => ModelSourceAdapter> = {
   openrouter: () => createOpenRouterAdapter(),
+  bedrock: () => createBedrockPriceAdapter(),
+  foundry: () => createFoundryPriceAdapter(),
 };
 
 /** Adapters selected by `LYRA_MODEL_SYNC_PROVIDERS` (comma separated, default `openrouter`). */
-export function getConfiguredAdapters(env: NodeJS.ProcessEnv = process.env): { adapters: ModelSourceAdapter[]; unsupported: string[] } {
-  const requested = (env.LYRA_MODEL_SYNC_PROVIDERS || 'openrouter')
+export function getConfiguredAdapters(env: NodeJS.ProcessEnv = process.env, providers?: string[]): { adapters: ModelSourceAdapter[]; unsupported: string[] } {
+  const requested = (providers?.length ? providers.join(',') : env.LYRA_MODEL_SYNC_PROVIDERS || 'openrouter')
     .split(',')
     .map((p) => p.trim().toLowerCase())
     .filter(Boolean);
@@ -37,9 +43,12 @@ export class ModelSyncBusyError extends Error {
 }
 
 /** Runs the configured providers' sync, refusing to overlap with a run that is already in progress. */
-export async function runConfiguredModelSync(options: Partial<SyncOptions> = {}): Promise<SyncReport & { unsupportedProviders: string[] }> {
+export async function runConfiguredModelSync(
+  options: Partial<SyncOptions> = {},
+  providers?: string[]
+): Promise<SyncReport & { unsupportedProviders: string[] }> {
   if (running) throw new ModelSyncBusyError();
-  const { adapters, unsupported } = getConfiguredAdapters();
+  const { adapters, unsupported } = getConfiguredAdapters(process.env, providers);
   running = runModelSync(adapters, options);
   try {
     return { ...(await running), unsupportedProviders: unsupported };

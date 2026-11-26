@@ -61,7 +61,7 @@ Activating a model (`"status": "active"`) also retires the older versions it rep
 
 ### `POST /api/gateway/llm/models/sync` (admin)
 
-Discovers new models and syncs prices and removals from providers (`LYRA_MODEL_SYNC_PROVIDERS`, default `openrouter`). **Dry run unless `"apply": true`.** Body (all optional): `{ "apply": false, "acceptPriceChanges": "all" | ["grok-4.20:openrouter"], "maxNewModels": 25 }`. Returns a report per provider: `newCandidates`, `skipped` (reason counts), `priceChanges` (`applied`, `would-apply`, `held`, `cleared`), `missing`, `expiring` and `reappeared`. Returns `409` if a sync is already running.
+Discovers new models and syncs prices and removals from providers (`LYRA_MODEL_SYNC_PROVIDERS`, default `openrouter`). **Dry run unless `"apply": true`.** Body (all optional): `{ "apply": false, "providers": ["openrouter", "bedrock", "foundry"], "acceptPriceChanges": "all" | ["grok-4.20:openrouter"], "maxNewModels": 25 }`. Returns a report per provider: `newCandidates`, `skipped` (reason counts), `priceChanges` (`applied`, `would-apply`, `held`, `cleared`), `missing`, `expiring` and `reappeared`. Returns `409` if a sync is already running.
 
 What a sync does, per provider listing:
 
@@ -72,7 +72,13 @@ What a sync does, per provider listing:
 - **Newer versions** replace older ones: an active model is moved to `legacy` (with `supersededBy`) when a newer version in the same line is at least as capable and not pricier, at most 10 per run. A new candidate that looks like a newer version is reported with `likelySuccessorOf`. Disable with `supersede: false`.
 - A failed download, or a listing under 20 models, changes nothing.
 
-The same sync runs from the CLI (`bun run models:sync`, `--apply`, `--accept-prices=...`) and optionally on a schedule (`LYRA_MODEL_SYNC_INTERVAL_HOURS`, off by default). Only OpenRouter has an adapter today; Bedrock and Foundry need their own.
+The same sync runs from the CLI (`bun run models:sync`, `--apply`, `--accept-prices=...`) and optionally on a schedule (`LYRA_MODEL_SYNC_INTERVAL_HOURS`, off by default). 
+**Providers.** `openrouter` discovers models and tracks prices. `bedrock` and `foundry` are **price-only**: they read AWS's public Price List and Azure's public Retail Prices API (no credentials) and update the prices of routes Lyra already has. They never register models, count misses, retire or expire anything. The same price guards apply (changes over 50% are held; accept with `modelId:bedrock` or `modelId:foundry`).
+
+- Bedrock prices follow how the route calls the model: a `global.` profile gets the global price, a regional profile (`us.`) or plain id gets the regional price, which carries a premium (about 10% for Claude and OpenAI models). Prices are read for us-east-1.
+- Foundry prices use the Global deployment rate; set `LYRA_AZURE_PRICE_SCOPE=datazone` if the routes are deployed to a data zone (about 10% more).
+- A route is priced only when exactly one standard on-demand input price and one output price match. Cached, batch, flex, priority, provisioned, fine-tuned and long-context meters are ignored. Models the sources don't list, or whose meters are ambiguous, keep their catalog price.
+- Run one provider with `--providers=bedrock` on the CLI or `"providers": ["bedrock"]` in the request.
 
 ### `GET /api/gateway/llm/models/events?modelId=&limit=` (admin)
 

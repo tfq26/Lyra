@@ -429,9 +429,9 @@ describe('OpenRouter model sync', () => {
   describe('configuration', () => {
     test('selects adapters from LYRA_MODEL_SYNC_PROVIDERS and reports unsupported ones', () => {
       expect(getConfiguredAdapters({} as NodeJS.ProcessEnv).adapters.map((a) => a.provider)).toEqual(['openrouter']);
-      const mixed = getConfiguredAdapters({ LYRA_MODEL_SYNC_PROVIDERS: 'openrouter, Bedrock,foundry,openrouter' } as unknown as NodeJS.ProcessEnv);
-      expect(mixed.adapters.map((a) => a.provider)).toEqual(['openrouter']);
-      expect(mixed.unsupported).toEqual(['bedrock', 'foundry']);
+      const mixed = getConfiguredAdapters({ LYRA_MODEL_SYNC_PROVIDERS: 'openrouter, Bedrock,foundry,openrouter,cloudflare' } as unknown as NodeJS.ProcessEnv);
+      expect(mixed.adapters.map((a) => a.provider)).toEqual(['openrouter', 'bedrock', 'foundry']);
+      expect(mixed.unsupported).toEqual(['cloudflare']);
     });
 
     test('parses the accepted price changes setting', () => {
