@@ -1,4 +1,4 @@
-import { bindings, defineConfig, defineContainer, exports } from 'cf/config';
+import { bindings, defineConfig, defineContainer, exports, triggers } from 'cf/config';
 import * as entrypoint from './worker.ts' with { type: 'cf-worker' };
 
 const lyraContainer = defineContainer({
@@ -16,6 +16,9 @@ export default defineConfig({
     entrypoint,
     compatibilityDate: '2026-11-01',
     domains: ['lyra.2helix.org'],
+    // Daily model sync at 05:17 UTC (worker.ts `scheduled`). Runs OpenRouter, Bedrock and Foundry through
+    // the container's sync endpoint; large price changes are held, not applied.
+    triggers: [triggers.scheduled({ schedule: '17 5 * * *' })],
     exports: {
       LyraContainer: exports.durableObject({
         storage: 'sqlite',

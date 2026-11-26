@@ -1,4 +1,5 @@
 import { Container, getContainer } from '@cloudflare/containers';
+import { runScheduledModelSync } from './server/modelSync/scheduledSync';
 
 type ContainerCtorArgs = ConstructorParameters<typeof Container<Env>>;
 
@@ -63,5 +64,11 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const container = getContainer(env.LYRA_CONTAINER, 'primary-v10');
     return container.fetch(request);
+  },
+
+  /** Daily Cron Trigger (see cloudflare.config.ts): wakes the container and runs the model sync. */
+  async scheduled(_controller: unknown, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }): Promise<void> {
+    const container = getContainer(env.LYRA_CONTAINER, 'primary-v10');
+    ctx.waitUntil(runScheduledModelSync((request) => container.fetch(request), env));
   },
 };
