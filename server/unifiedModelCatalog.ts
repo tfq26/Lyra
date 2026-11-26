@@ -605,7 +605,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
         upstreamModelId: 'DeepSeek-V4-Pro',
         priority: 2,
         apiStyle: 'openai-chat',
-        pricing: { inputPerMillion: 0.55, outputPerMillion: 2.2 },
+        pricing: { inputPerMillion: 1.74, outputPerMillion: 3.48 },
         supportsPromptCaching: false,
       },
       {
