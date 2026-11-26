@@ -603,7 +603,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
       {
         provider: 'foundry',
         upstreamModelId: 'DeepSeek-V4-Pro',
-        priority: 1,
+        priority: 2,
         apiStyle: 'openai-chat',
         pricing: { inputPerMillion: 0.55, outputPerMillion: 2.2 },
         supportsPromptCaching: false,
@@ -611,9 +611,9 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
       {
         provider: 'openrouter',
         upstreamModelId: 'deepseek/deepseek-v4-pro-0813',
-        priority: 2,
+        priority: 1,
         apiStyle: 'openai-chat',
-        pricing: { inputPerMillion: 0.1, outputPerMillion: 8.0 },
+        pricing: { inputPerMillion: 0.111, outputPerMillion: 4.44 },
         supportsPromptCaching: true,
       },
     ],
@@ -686,7 +686,7 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
       {
         provider: 'bedrock',
         upstreamModelId: 'qwen.qwen3-coder-480b-a35b-v1:0',
-        priority: 1,
+        priority: 2,
         apiStyle: 'bedrock-converse',
         pricing: { inputPerMillion: 0.45, outputPerMillion: 1.8 },
         supportsPromptCaching: false,
@@ -694,9 +694,9 @@ export const UNIFIED_MODEL_CATALOG: CanonicalModelProfile[] = [
       {
         provider: 'openrouter',
         upstreamModelId: 'qwen/qwen3-coder',
-        priority: 2,
+        priority: 1,
         apiStyle: 'openai-chat',
-        pricing: { inputPerMillion: 0.45, outputPerMillion: 1.8 },
+        pricing: { inputPerMillion: 0.3, outputPerMillion: 1.0 },
         supportsPromptCaching: false,
       },
     ],
