@@ -22,6 +22,8 @@ export interface RunAgentOptions {
   search?: boolean;
   imagePaths?: string[];
   approvalPolicy?: 'untrusted' | 'on-request' | 'never';
+  isSlashCommand?: boolean;
+  slashCommand?: string;
 }
 
 export class ProcessManager extends EventEmitter {
@@ -88,6 +90,30 @@ export class ProcessManager extends EventEmitter {
     };
   }
 
+  public async getModels(agentType: AgentType): Promise<Array<{ id: string; label: string }>> {
+    const configured = process.env[agentType === 'codex' ? 'LYRA_CODEX_MODELS' : agentType === 'claude_code' ? 'LYRA_CLAUDE_MODELS' : 'LYRA_ANTIGRAVITY_MODELS'];
+    if (configured) return configured.split(',').map((value) => value.trim()).filter(Boolean).map((value) => ({ id: value, label: value }));
+    if (agentType !== 'antigravity') return [{ id: 'default', label: 'CLI default' }];
+
+    const child = spawn(this.findBinary('antigravity'), ['models'], { env: process.env });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGTERM'), 15000);
+    child.stdout?.on('data', (data) => { stdout += data.toString(); });
+    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+    return new Promise((resolve) => {
+      child.on('close', () => {
+        clearTimeout(timer);
+        const models = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+          const [id, ...labelParts] = line.split(/\s+/);
+          return id && labelParts.length ? { id, label: labelParts.join(' ') } : null;
+        }).filter((model): model is { id: string; label: string } => Boolean(model));
+        resolve(models.length ? models : [{ id: 'default', label: stderr.includes('not logged') ? 'CLI default (sign in to load models)' : 'CLI default' }]);
+      });
+      child.on('error', () => { clearTimeout(timer); resolve([{ id: 'default', label: 'CLI default' }]); });
+    });
+  }
+
   public cancel(runId: string): boolean {
     const child = this.activeProcesses.get(runId);
     if (!child) return false;
@@ -103,7 +129,10 @@ export class ProcessManager extends EventEmitter {
       'stream-json',
     ];
     if (executionMode === 'unrestricted' && process.env.LYRA_ENABLE_UNRESTRICTED === 'true') args.push('--dangerously-skip-permissions');
-    if (options.effort) args.push('--effort', options.effort);
+    // Antigravity model IDs such as gemini-3.1-pro-low already encode effort.
+    // Sending a second, different --effort flag makes the CLI exit with status 1.
+    const modelEncodesEffort = Boolean(options.model && /-(low|medium|high)$/.test(options.model));
+    if (options.effort && !modelEncodesEffort) args.push('--effort', options.effort);
     if (options.model) args.push('--model', options.model);
     if (options.addDirs) for (const dir of options.addDirs) args.push('--add-dir', dir);
     if (options.continueSession) args.push('--continue');

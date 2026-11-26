@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Session, AgentType } from '../types';
 import { 
   Plus, 
@@ -7,12 +7,13 @@ import {
   Search,
   HardDrive,
   FolderTree,
-  Terminal,
-  Play,
-  CheckCircle2
+  Bell
 } from 'lucide-react';
 import { SessionListSkeleton } from './Skeletons';
 import { isTauri, pickDirectory } from '../lib/platform';
+import harpIcon from '../public/icons/harp-svgrepo-com.svg';
+import type { AppNotification } from '../types';
+import { NotificationList } from './NotificationCenter';
 
 interface SidebarProps {
   sessions: Session[];
@@ -27,7 +28,8 @@ interface SidebarProps {
   storagePath: string;
   onOpenStorageConfig: () => void;
   isLoadingSessions?: boolean;
-  onStartCli?: (agent: AgentType) => void;
+  notifications?: AppNotification[];
+  onMarkNotificationsRead?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -43,10 +45,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
   storagePath,
   onOpenStorageConfig,
   isLoadingSessions = false,
-  onStartCli,
+  notifications = [],
+  onMarkNotificationsRead,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [sessionPaneRatio, setSessionPaneRatio] = useState(0.62);
+  const sidebarContentRef = useRef<HTMLDivElement>(null);
+  const resizingRef = useRef(false);
   const isDesktop = isTauri();
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!resizingRef.current || !sidebarContentRef.current) return;
+      const bounds = sidebarContentRef.current.getBoundingClientRect();
+      const ratio = (event.clientY - bounds.top) / bounds.height;
+      setSessionPaneRatio(Math.max(0.28, Math.min(0.82, ratio)));
+    };
+    const stopResize = () => { resizingRef.current = false; document.body.style.cursor = ''; };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResize);
+    return () => { window.removeEventListener('pointermove', handlePointerMove); window.removeEventListener('pointerup', stopResize); };
+  }, []);
 
   const handleChooseFolder = async () => {
     const selected = await pickDirectory(workingDirectory);
@@ -79,10 +98,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className={`h-12 px-3 flex items-center justify-between border-b border-neutral-800/70 ${isDesktop ? 'pl-20' : ''}`}
         >
           <div className="flex items-center gap-2 pointer-events-none">
-            <div className="w-4 h-4 rounded bg-neutral-100 flex items-center justify-center text-[#09090b] font-bold text-[10px]">
-              L
-            </div>
+            <img src={harpIcon} alt="" className="w-4 h-4" />
             <span className="font-medium text-xs text-neutral-200 tracking-tight">Lyra</span>
+            <span className="text-[10px] text-neutral-600 font-mono">v{__APP_VERSION__}</span>
             {isDesktop && (
               <span className="px-1.5 py-0.2 rounded text-[9px] bg-neutral-800 border border-neutral-700/60 text-neutral-400 font-medium">
                 App
@@ -141,11 +159,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Sessions list */}
-      <div className="flex-1 overflow-y-auto sidebar-scrollbar px-2 py-1 space-y-0.5">
-        <div className="px-2 pt-2 pb-1 text-[10px] uppercase font-semibold text-neutral-600 tracking-wider">
-          Sessions
-        </div>
+      {/* Chats and notifications split pane */}
+      <div ref={sidebarContentRef} className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-[140px] min-w-0 overflow-y-auto sidebar-scrollbar px-2 py-1 space-y-0.5" style={{ flex: `${sessionPaneRatio} 1 0%` }}>
+          <div className="px-2 pt-2 pb-1 text-[10px] uppercase font-semibold text-neutral-600 tracking-wider">Chats</div>
         {isLoadingSessions ? (
           <SessionListSkeleton />
         ) : filteredSessions.length === 0 ? (
@@ -176,6 +193,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
             );
           })
         )}
+        </div>
+
+        <div
+          role="separator"
+          aria-label="Resize chats and notifications"
+          aria-valuemin={28}
+          aria-valuemax={82}
+          aria-valuenow={Math.round(sessionPaneRatio * 100)}
+          tabIndex={0}
+          onPointerDown={(event) => { event.preventDefault(); resizingRef.current = true; document.body.style.cursor = 'row-resize'; }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowUp') { event.preventDefault(); setSessionPaneRatio((value) => Math.max(0.28, value - 0.04)); }
+            if (event.key === 'ArrowDown') { event.preventDefault(); setSessionPaneRatio((value) => Math.min(0.82, value + 0.04)); }
+          }}
+          className="group relative z-10 h-2 shrink-0 cursor-row-resize border-y border-neutral-800/60 bg-neutral-950 outline-none focus-visible:bg-neutral-800"
+        >
+          <div className="absolute left-1/2 top-1/2 h-px w-8 -translate-x-1/2 -translate-y-1/2 bg-neutral-700/70 transition-colors group-hover:bg-neutral-400" />
+        </div>
+
+        <div className="min-h-[120px] min-w-0 overflow-hidden bg-[#0b0b0d]" style={{ flex: `${1 - sessionPaneRatio} 1 0%` }}>
+          <NotificationList notifications={notifications} onMarkAllRead={onMarkNotificationsRead || (() => undefined)} compact />
+        </div>
       </div>
 
       {/* Calm Footer: Storage & Workspace status */}
@@ -197,40 +236,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
         </button>
 
-        {/* Local CLI Engine Status / Startup Bar */}
-        <div className="px-1.5 pt-1 border-t border-neutral-800/40 flex items-center justify-between text-[11px] text-neutral-500">
-          <div className="flex items-center gap-1.5">
-            <Terminal className="w-3 h-3 text-neutral-500" />
-            <span className="text-[10px] text-neutral-400">Local CLIs:</span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            {(['antigravity', 'claude_code', 'codex'] as AgentType[]).map((agent) => {
-              const status = agentStatuses[agent];
-              const isRunning = status === 'running';
-              const label = agent === 'claude_code' ? 'C' : agent === 'codex' ? 'X' : 'A';
-              const name = agent === 'claude_code' ? 'Claude' : agent === 'codex' ? 'Codex' : 'Antigravity';
-
-              return (
-                <button
-                  key={agent}
-                  onClick={() => onStartCli && onStartCli(agent)}
-                  className={`px-1.5 py-0.5 rounded text-[9px] font-medium border transition-colors flex items-center gap-1 ${
-                    isRunning
-                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-                      : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-                  }`}
-                  title={`${name} CLI (${status}) - Click to start/check`}
-                >
-                  <span className={`w-1 h-1 rounded-full ${isRunning ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
-                  <span>{label}</span>
-                </button>
-              );
-            })}
-          </div>
+        <div className="px-1.5 pt-1 border-t border-neutral-800/40 flex items-center gap-1.5 text-[10px] text-neutral-600">
+          <Bell className="w-3 h-3" /><span>Drag the divider to resize chats and notifications</span>
         </div>
       </div>
     </aside>
   );
 };
-

@@ -14,6 +14,7 @@ export interface UnifiedSessionMeta {
   activeAgents: AgentType[];
   tags?: string[];
   archived?: boolean;
+  agentOptions?: Record<string, unknown>;
 }
 
 export interface UnifiedEvent {

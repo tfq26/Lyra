@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN npm install --include=dev --no-audit --no-fund --no-package-lock
 COPY . .
 RUN bun run build
 

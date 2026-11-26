@@ -13,6 +13,10 @@ import {
   Check, 
   ArrowRight
 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import antigravityIcon from '../public/icons/antigravity-color.svg';
+import claudeIcon from '../public/icons/claudecode-color.svg';
+import codexIcon from '../public/icons/codex-color.svg';
 
 interface MessageItemProps {
   message: Message;
@@ -59,6 +63,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
     }
   };
 
+  const getAgentIcon = (agent: AgentType) => {
+    switch (agent) {
+      case 'antigravity': return antigravityIcon;
+      case 'claude_code': return claudeIcon;
+      case 'codex': return codexIcon;
+      default: return null;
+    }
+  };
+
   if (isUser) {
     return (
       <div className="flex flex-col items-end w-full group animate-fade-in">
@@ -84,8 +97,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
       {/* Author Header */}
       <div className="flex items-center justify-between w-full">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center text-[10px] font-medium text-neutral-300">
-            {message.agentType === 'claude_code' ? 'C' : message.agentType === 'codex' ? 'X' : 'A'}
+          <div className="w-5 h-5 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center overflow-hidden">
+            {getAgentIcon(message.agentType) ? (
+              <img src={getAgentIcon(message.agentType) || undefined} alt="" className="w-3.5 h-3.5" />
+            ) : (
+              <span className="text-[10px] font-medium text-neutral-300">A</span>
+            )}
           </div>
           <span className="text-xs font-medium text-neutral-200">
             {getAgentLabel(message.agentType)}
@@ -137,6 +154,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
               {message.thinking}
             </div>
           )}
+        </div>
+      )}
+
+      {message.status === 'streaming' && !message.content && (
+        <div className="ml-7 flex items-center gap-2 text-xs text-neutral-500 py-1">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          <span>{message.thinking ? 'Thinking…' : 'Preparing response…'}</span>
         </div>
       )}
 
@@ -228,6 +252,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onDispatchToA
             </ReactMarkdown>
           </div>
         )}
+
+      {message.status === 'streaming' && message.content && (
+        <div className="ml-7 flex items-center gap-2 text-[11px] text-neutral-500 py-1">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          <span>Generating response…</span>
+        </div>
+      )}
     </div>
   );
 };

@@ -3,8 +3,11 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { MultiAgentBridge } from './components/MultiAgentBridge';
 import { StorageConfigModal } from './components/StorageConfigModal';
-import type { Session, Message, AgentType, AgentBridgeTask, ToolCall, FileDiff, AgentRunOptions } from './types';
+import type { Session, Message, AgentType, AgentBridgeTask, ToolCall, FileDiff, AgentRunOptions, ModelOption, AppNotification } from './types';
+import { findSlashCommand, getSlashCommands, parseSlashCommand } from './lib/slashCommands';
 import { sendDesktopNotification } from './lib/platform';
+import { Toaster } from './components/ui/sonner';
+import { toast } from 'sonner';
 
 export function App() {
   const authToken = (import.meta as any).env?.VITE_LYRA_AUTH_TOKEN as string | undefined;
@@ -32,7 +35,10 @@ export function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeRunIds, setActiveRunIds] = useState<Set<string>>(new Set());
   const [agentOptions, setAgentOptions] = useState<AgentRunOptions>({});
+  const [agentModels, setAgentModels] = useState<Record<string, ModelOption[]>>({});
+  const [isSavingAgentOptions, setIsSavingAgentOptions] = useState(false);
   const [agentCapabilities, setAgentCapabilities] = useState<Record<string, { installed: boolean; options: string[] }>>({});
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [bridgeTasks, setBridgeTasks] = useState<AgentBridgeTask[]>([]);
   const [storagePath, setStoragePath] = useState<string>('~/.lyra/chats');
   const [isStorageModalOpen, setIsStorageModalOpen] = useState(false);
@@ -48,6 +54,25 @@ export function App() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const notificationKeysRef = useRef(new Map<string, number>());
+
+  const agentLabel = (agent?: AgentType) => agent === 'claude_code' ? 'Claude Code' : agent === 'codex' ? 'Codex' : agent === 'antigravity' ? 'Antigravity' : 'Lyra';
+  const addNotification = (level: AppNotification['level'], title: string, message: string, agentType?: AgentType) => {
+    const key = `${level}:${title}:${message}`;
+    const lastShown = notificationKeysRef.current.get(key) || 0;
+    if (Date.now() - lastShown < 5000) return;
+    notificationKeysRef.current.set(key, Date.now());
+    const notification: AppNotification = {
+      id: `notification-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      title, message, level, agentType, createdAt: new Date().toISOString(),
+    };
+    setNotifications((prev) => [notification, ...prev].slice(0, 100));
+    if (level === 'error') toast.error(title, { description: message });
+    else if (level === 'warning') toast.warning(title, { description: message });
+    else if (level === 'success') toast.success(title, { description: message });
+    else toast.info(title, { description: message });
+    void sendDesktopNotification(title, message);
+  };
 
   // Fetch initial sessions & storage config from API
   useEffect(() => {
@@ -55,13 +80,21 @@ export function App() {
       try {
         setIsLoadingSessions(true);
         await apiFetch('/api/auth/bootstrap', { credentials: 'include' });
-        const [configRes, sessionsRes, capabilitiesRes] = await Promise.all([
+        const [configRes, sessionsRes, capabilitiesRes, modelsRes] = await Promise.all([
           apiFetch('/api/storage/config'),
           apiFetch('/api/sessions'),
           apiFetch('/api/agents/capabilities'),
+          apiFetch('/api/agents/models'),
         ]);
 
-        if (capabilitiesRes.ok) setAgentCapabilities(await capabilitiesRes.json());
+        if (capabilitiesRes.ok) {
+          const capabilities = await capabilitiesRes.json();
+          setAgentCapabilities(capabilities);
+          for (const [agent, info] of Object.entries(capabilities) as Array<[AgentType, { installed: boolean }]>) {
+            if (info.installed === false) addNotification('warning', `${agentLabel(agent)} unavailable`, 'This CLI is not installed or could not be found.', agent);
+          }
+        }
+        if (modelsRes.ok) setAgentModels(await modelsRes.json());
 
         if (configRes.ok) {
           const configData = await configRes.json();
@@ -86,6 +119,7 @@ export function App() {
                     createdAt: s.createdAt,
                     updatedAt: s.updatedAt,
                     messages: [],
+                    agentOptions: s.agentOptions || {},
                   });
                 } else if (s.title && existing.title !== s.title) {
                   existing.title = s.title;
@@ -216,6 +250,7 @@ export function App() {
                       ...s,
                       title: data.meta?.title || s.title,
                       activeAgent: data.meta?.activeAgents?.[0] || s.activeAgent,
+                      agentOptions: data.meta?.agentOptions || s.agentOptions || {},
                       messages: loaded,
                     }
                   : s
@@ -223,6 +258,7 @@ export function App() {
             );
             if (data.meta?.activeAgents?.[0]) {
               setActiveAgent(data.meta.activeAgents[0]);
+              setAgentOptions(data.meta?.agentOptions?.[data.meta.activeAgents[0]] || {});
             }
           }
         }
@@ -287,11 +323,29 @@ export function App() {
       const meta = msg.payload;
       if (meta?.id) {
         setSessions((prev) =>
-          prev.map((s) => (s.id === meta.id ? { ...s, title: meta.title || s.title } : s))
+          prev.map((s) => (s.id === meta.id ? {
+            ...s,
+            title: meta.title || s.title,
+            workingDirectory: meta.workspacePath || s.workingDirectory,
+            updatedAt: meta.updatedAt || s.updatedAt,
+          } : s))
         );
+      }
+    } else if (msg.type === 'run_started') {
+      addNotification('info', `${agentLabel(msg.agentType)} started`, 'The agent is processing your request.', msg.agentType);
+    } else if (msg.type === 'run_cancelled') {
+      addNotification('warning', `${agentLabel(msg.agentType)} stopped`, 'The active run was cancelled.', msg.agentType);
+    } else if (msg.type === 'error') {
+      addNotification('error', `${agentLabel(msg.agentType)} error`, String(msg.payload?.message || msg.payload || 'The CLI reported an error.'), msg.agentType);
+    } else if (msg.type === 'thought_chunk') {
+      const thought = String(msg.payload?.text || msg.payload || '');
+      if (/error|failed|failure|auth|permission|attention|warning|unavailable/i.test(thought)) {
+        addNotification('warning', `${agentLabel(msg.agentType)} needs attention`, thought.slice(0, 240), msg.agentType);
       }
     } else if (msg.type === 'unified_event') {
       const { sessionId, agent, type, payload, timestamp, eventId } = msg.payload;
+      if (type === 'status' && payload?.text) addNotification('info', `${agentLabel(agent)} status`, String(payload.text).slice(0, 240), agent);
+      if (type === 'tool_call' && payload?.status === 'error') addNotification('error', `${agentLabel(agent)} tool failed`, String(payload.output || payload.name || 'A tool call failed.').slice(0, 240), agent);
 
       setSessions((prev) => {
         const sessionIndex = prev.findIndex((s) => s.id === sessionId);
@@ -540,10 +594,21 @@ export function App() {
         return next;
       });
       if (!msg.runId) setIsStreaming(false);
+      setSessions((prev) => prev.map((session) => {
+        if (session.id !== (msg.sessionId || activeSessionId)) return session;
+        return {
+          ...session,
+          messages: session.messages.map((message) =>
+            (!msg.runId || message.runId === msg.runId) && message.role === 'assistant'
+              ? { ...message, status: 'done' as const }
+              : message
+          ),
+        };
+      }));
       const agentFinished = msg.agentType || activeAgent;
       setAgentStatuses((prev) => ({ ...prev, [agentFinished]: 'ready' }));
       const agentName = agentFinished === 'claude_code' ? 'Claude Code' : agentFinished === 'codex' ? 'Codex' : 'Antigravity';
-      sendDesktopNotification('Agent Completed', `${agentName} finished processing task.`);
+      addNotification(msg.code && msg.code !== 0 ? 'error' : 'success', msg.code && msg.code !== 0 ? `${agentName} failed` : `${agentName} completed`, msg.code && msg.code !== 0 ? `Exited with status ${msg.code}.` : 'Finished processing task.', agentFinished);
     } else if (msg.type === 'bridge_dispatch') {
       setBridgeTasks((prev) => [msg.payload, ...prev]);
     }
@@ -569,7 +634,46 @@ export function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [sessions]);
 
-  const handleSendMessage = (content: string, agent: AgentType) => {
+  const handleSendMessage = (content: string, agent: AgentType, isSlashCommand = false) => {
+    const slash = isSlashCommand ? parseSlashCommand(content) : null;
+    if (slash?.command === '/clear') {
+      setSessions((prev) => prev.map((session) => session.id === activeSessionId ? { ...session, messages: [] } : session));
+      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'clear_session', sessionId: activeSessionId, payload: {} }));
+      return;
+    }
+    if (slash?.command === '/new') {
+      void handleCreateSession();
+      return;
+    }
+    if (slash?.command === '/stop') {
+      const runId = [...activeRunIds][0];
+      if (runId && wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'cancel_run', payload: { runId } }));
+      return;
+    }
+    if (slash?.command === '/help') {
+      const helpMessage: Message = {
+        id: `help-${Date.now()}`,
+        role: 'assistant',
+        agentType: agent,
+        content: getSlashCommands(agent, '/').map((command) => `- **${command.name}** — ${command.description}`).join('\n'),
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      };
+      setSessions((prev) => prev.map((session) => session.id === activeSessionId ? { ...session, messages: [...session.messages, helpMessage] } : session));
+      return;
+    }
+    if (slash && findSlashCommand(agent, slash.command)?.supportsHeadless === false) {
+      const notice: Message = {
+        id: `slash-notice-${Date.now()}`,
+        role: 'assistant',
+        agentType: agent,
+        content: `${slash.command} requires an interactive ${agent} session. Lyra will support persistent CLI sessions for this command in a later update.`,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      };
+      setSessions((prev) => prev.map((session) => session.id === activeSessionId ? { ...session, messages: [...session.messages, notice] } : session));
+      return;
+    }
     const userMsg: Message = {
       id: `msg-${Date.now()}-user`,
       role: 'user',
@@ -618,6 +722,8 @@ export function App() {
             runId: assistantMsgPlaceholder.runId,
             executionMode: currentSession.executionMode || 'safe',
             ...agentOptions,
+            isSlashCommand,
+            slashCommand: isSlashCommand ? parseSlashCommand(content)?.command : undefined,
           },
         })
       );
@@ -726,7 +832,6 @@ export function App() {
         storagePath={storagePath}
         onOpenStorageConfig={() => setIsStorageModalOpen(true)}
         isLoadingSessions={isLoadingSessions}
-        onStartCli={handleStartCli}
       />
 
       {/* Main Workspace Area */}
@@ -735,7 +840,10 @@ export function App() {
           sessionTitle={currentSession.title}
           messages={currentSession.messages}
           activeAgent={activeAgent}
-          onSelectAgent={setActiveAgent}
+          onSelectAgent={(agent) => {
+            setActiveAgent(agent);
+            setAgentOptions(currentSession.agentOptions?.[agent] || {});
+          }}
           onSendMessage={handleSendMessage}
           onDispatchToAgent={handleDispatchToAgent}
           onClearSession={() => {
@@ -750,8 +858,29 @@ export function App() {
           agentStatuses={agentStatuses}
           isLoadingMessages={isLoadingMessages}
           agentOptions={agentOptions}
-          onAgentOptionsChange={setAgentOptions}
+          onAgentOptionsChange={(options) => setAgentOptions(options)}
+          onSaveAgentOptions={async () => {
+            setIsSavingAgentOptions(true);
+            try {
+              const nextAgentOptions = { ...(currentSession.agentOptions || {}), [activeAgent]: agentOptions };
+              const response = await apiFetch(`/api/sessions/${encodeURIComponent(activeSessionId)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agentOptions: nextAgentOptions }),
+              });
+              if (!response.ok) throw new Error('Unable to save agent options');
+              setSessions((prev) => prev.map((session) => session.id === activeSessionId ? { ...session, agentOptions: nextAgentOptions } : session));
+            } catch (error) {
+              console.error('Failed to save agent options:', error);
+            } finally {
+              setIsSavingAgentOptions(false);
+            }
+          }}
+          savingAgentOptions={isSavingAgentOptions}
+          agentModels={agentModels[activeAgent] || []}
           agentCapabilities={agentCapabilities}
+          notifications={notifications}
+          onMarkNotificationsRead={() => setNotifications((prev) => prev.map((notification) => ({ ...notification, read: true })))}
           onCancelRun={() => {
             const runId = [...activeRunIds][0];
             if (runId && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -786,6 +915,7 @@ export function App() {
         currentPath={storagePath}
         onSavePath={handleSaveStoragePath}
       />
+      <Toaster theme="dark" position="bottom-right" />
     </div>
   );
 }

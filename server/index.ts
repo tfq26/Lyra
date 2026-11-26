@@ -29,6 +29,15 @@ function isAuthorized(req: http.IncomingMessage) {
   return req.headers.authorization === `Bearer ${authToken}` || cookieToken === authToken;
 }
 
+function resolveWorkspacePath(requestedPath: string): string {
+  const fallback = fs.existsSync('/workspace') ? '/workspace' : process.cwd();
+  try {
+    return validateWorkingDirectory(requestedPath);
+  } catch {
+    return validateWorkingDirectory(fallback);
+  }
+}
+
 setTimeout(() => {
   antigravityAdapter.start();
   claudeAdapter.start();
@@ -73,6 +82,19 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/agents/capabilities' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(processManager.getCapabilities()));
+    return;
+  }
+
+  if (url.pathname === '/api/agents/models' && req.method === 'GET') {
+    Promise.all(['antigravity', 'claude_code', 'codex'].map(async (agentType) => [agentType, await processManager.getModels(agentType as 'antigravity' | 'claude_code' | 'codex')] as const))
+      .then((entries) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(Object.fromEntries(entries)));
+      })
+      .catch(() => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to load agent models' }));
+      });
     return;
   }
 
@@ -170,7 +192,8 @@ const server = http.createServer((req, res) => {
         if (payload.title !== undefined) updates.title = String(payload.title).trim().slice(0, 120);
         if (payload.archived !== undefined) updates.archived = Boolean(payload.archived);
         if (payload.workspacePath !== undefined) updates.workspacePath = validateWorkingDirectory(String(payload.workspacePath));
-        const updated = store.updateSessionMeta(sessionId, updates);
+        if (payload.agentOptions !== undefined && payload.agentOptions && typeof payload.agentOptions === 'object') updates.agentOptions = payload.agentOptions;
+          const updated = store.updateSessionMeta(sessionId, updates);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(updated));
       } catch (error) {
         res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid session update' }));
@@ -360,7 +383,9 @@ wss.on('connection', (ws, req) => {
         const sessionId = assertSafeId(payload.sessionId || msg.sessionId || 'session-main', 'session ID');
         const agentType = payload.agentType || msg.agentType || 'antigravity';
         const prompt = payload.prompt || '';
-        const cwd = validateWorkingDirectory(payload.cwd || process.cwd());
+        const requestedCwd = String(payload.cwd || process.cwd());
+        const cwd = resolveWorkspacePath(requestedCwd);
+        if (cwd !== requestedCwd) store.updateSessionMeta(sessionId, { workspacePath: cwd });
         const binding = store.getAgentBinding(sessionId, agentType);
 
         // Append user message event to unified storage
@@ -386,6 +411,8 @@ wss.on('connection', (ws, req) => {
           search: payload.search,
           imagePaths: payload.imagePaths,
           approvalPolicy: payload.approvalPolicy,
+          isSlashCommand: payload.isSlashCommand,
+          slashCommand: payload.slashCommand,
         });
       } else if (msg.type === 'cancel_run') {
         processManager.cancel(String(msg.payload?.runId || ''));

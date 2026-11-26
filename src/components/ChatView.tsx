@@ -1,17 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { Message, AgentType, AgentRunOptions } from '../types';
+import type { Message, AgentType, AgentRunOptions, ModelOption } from '../types';
 import { MessageItem } from './MessageItem';
 import { AgentSelector } from './AgentSelector';
-import { ArrowUp, Loader2, Trash2, Square } from 'lucide-react';
+import { ArrowUp, Trash2, Square } from 'lucide-react';
 import { MessageHistorySkeleton } from './Skeletons';
 import { AgentOptions } from './AgentOptions';
+import { SlashCommandMenu } from './SlashCommandMenu';
+import { getSlashCommands, parseSlashCommand, type SlashCommand } from '../lib/slashCommands';
 
 interface ChatViewProps {
   sessionTitle: string;
   messages: Message[];
   activeAgent: AgentType;
   onSelectAgent: (agent: AgentType) => void;
-  onSendMessage: (content: string, agent: AgentType) => void;
+  onSendMessage: (content: string, agent: AgentType, isSlashCommand?: boolean) => void;
   onDispatchToAgent: (toAgent: AgentType, content: string) => void;
   onClearSession?: () => void;
   isStreaming: boolean;
@@ -20,6 +22,9 @@ interface ChatViewProps {
   onCancelRun?: () => void;
   agentOptions: AgentRunOptions;
   onAgentOptionsChange: (options: AgentRunOptions) => void;
+  onSaveAgentOptions: () => void;
+  savingAgentOptions?: boolean;
+  agentModels: ModelOption[];
   agentCapabilities?: Record<string, { installed: boolean }>;
 }
 
@@ -37,9 +42,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onCancelRun,
   agentOptions,
   onAgentOptionsChange,
+  onSaveAgentOptions,
+  savingAgentOptions = false,
+  agentModels,
   agentCapabilities = {},
 }) => {
   const [prompt, setPrompt] = useState('');
+  const slashQuery = prompt.startsWith('/') ? prompt.split(/\s/, 1)[0] || '/' : '';
+  const slashCommands = slashQuery ? getSlashCommands(activeAgent, slashQuery) : [];
   const mainRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -70,7 +80,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (e) e.preventDefault();
     if (!prompt.trim()) return;
     shouldAutoScrollRef.current = true;
-    onSendMessage(prompt.trim(), activeAgent);
+    const parsed = parseSlashCommand(prompt);
+    onSendMessage(prompt.trim(), activeAgent, Boolean(parsed));
     setPrompt('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -79,6 +90,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashCommands.length && e.key === 'Tab') {
+      e.preventDefault();
+      const command = slashCommands[0];
+      if (command) setPrompt(`${command.name} `);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -115,17 +132,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <span className="text-xs text-neutral-500 truncate max-w-xs hidden sm:inline">
             {sessionTitle}
           </span>
-          <AgentOptions agent={activeAgent} options={agentOptions} onChange={onAgentOptionsChange} />
+          <span className="text-[10px] text-neutral-600 font-mono hidden sm:inline">v{__APP_VERSION__}</span>
+          <AgentOptions agent={activeAgent} options={agentOptions} onChange={onAgentOptionsChange} models={agentModels} onSave={onSaveAgentOptions} saving={savingAgentOptions} />
         </div>
 
         <div className="flex items-center gap-2">
-          {isStreaming && (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] text-neutral-400 bg-neutral-900 border border-neutral-800">
-              <Loader2 className="w-3 h-3 animate-spin text-neutral-300" />
-              <span>Thinking...</span>
-            </div>
-          )}
-
           {isStreaming && onCancelRun && (
             <button onClick={onCancelRun} className="p-1.5 rounded-md text-neutral-500 hover:text-rose-300 hover:bg-neutral-800/50 transition-colors" title="Cancel run">
               <Square className="w-3.5 h-3.5" />
@@ -201,6 +212,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onSubmit={handleSubmit}
             className="relative rounded-lg border border-neutral-800 bg-neutral-900/60 focus-within:border-neutral-700 focus-within:bg-neutral-900 transition-all shadow-sm"
           >
+            <SlashCommandMenu
+              commands={slashCommands}
+              onSelect={(command: SlashCommand) => {
+                setPrompt(`${command.name} `);
+                textareaRef.current?.focus();
+              }}
+            />
             <textarea
               ref={textareaRef}
               value={prompt}
@@ -213,18 +231,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
 
             <div className="absolute right-2 bottom-2 flex items-center">
-              <button
-                type="submit"
-                disabled={!prompt.trim() || isStreaming}
-                className="p-1 rounded-md bg-neutral-200 text-neutral-950 hover:bg-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
-                title="Send instruction"
-              >
-                {isStreaming ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
+              {isStreaming ? (
+                <button
+                  type="button"
+                  onClick={onCancelRun}
+                  disabled={!onCancelRun}
+                  className="p-1 rounded-md bg-neutral-200 text-neutral-950 hover:bg-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+                  title="Stop response"
+                  aria-label="Stop response"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!prompt.trim()}
+                  className="p-1 rounded-md bg-neutral-200 text-neutral-950 hover:bg-white disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+                  title="Send instruction"
+                  aria-label="Send instruction"
+                >
                   <ArrowUp className="w-3.5 h-3.5 stroke-[2.5]" />
-                )}
-              </button>
+                </button>
+              )}
             </div>
           </form>
         </div>
