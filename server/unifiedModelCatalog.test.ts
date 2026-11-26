@@ -21,6 +21,18 @@ describe('Unified Canonical Model Catalog & Capacity Router', () => {
     process.env = { ...originalEnv };
   });
 
+  test('tries the cheaper OpenRouter route first for models where it costs far less than the alternative', () => {
+    // Routes are tried in priority order and Auto prices a model by its first route, so a much cheaper
+    // OpenRouter route only saves money (and only shows up in Auto's cost estimate) if it comes first.
+    const blended = (p: { inputPerMillion: number; outputPerMillion: number }) => p.inputPerMillion * 0.75 + p.outputPerMillion * 0.25;
+    for (const id of ['deepseek-v4-pro', 'qwen3-coder-480b']) {
+      const routes = resolveProviderRoutes(id);
+      expect(routes[0]!.provider).toBe('openrouter');
+      expect(routes.length).toBeGreaterThan(1);
+      expect(blended(routes[0]!.pricing)).toBeLessThan(blended(routes[1]!.pricing));
+    }
+  });
+
   test('normalizes legacy Bedrock and OpenRouter IDs to canonical model IDs', () => {
     expect(normalizeCanonicalModelId('us.anthropic.claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
     expect(normalizeCanonicalModelId('anthropic/claude-sonnet-4.6')).toBe('claude-sonnet-4-6');
